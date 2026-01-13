@@ -26,7 +26,7 @@
             "dependsOn": [
                 "Validate prerequisites (Microsoft 365 Agents Playground)",
                 "Deploy (Microsoft 365 Agents Playground)",
-                // "Start application (Microsoft 365 Agents Playground)",
+                "Start application (Microsoft 365 Agents Playground)",
                 "Start Microsoft 365 Agents Playground",
             ],
             "dependsOrder": "sequence"
@@ -41,11 +41,10 @@
                 "prerequisites": [
                     "nodejs", // Validate if Node.js is installed.
                     "portOccupancy" // Validate available ports to ensure those debug ones are not occupied.
-                ],
+                ],                
                 "portOccupancy": [
-                    8080, // app port
                     3978, // app service port
-                    9239, // app inspector port for Node.js debugger
+                    5678, // app inspector port for Python debugger
                     56150, // Microsoft 365 Agents Playground port
                 ]
             }
@@ -92,7 +91,8 @@
             "options": {
                 "env": {
                   "PATH": "${workspaceFolder}/devTools/playground/node_modules/.bin:${env:PATH}",
-                  "DEFAULT_CHANNEL_ID": "emulator"
+                  "DEFAULT_CHANNEL_ID": "emulator",
+                  "LOG_LEVEL" : "DEBUG"
                 }
             },
             "windows": {

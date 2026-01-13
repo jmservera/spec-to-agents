@@ -41,7 +41,7 @@ dev = [
     # Development and testing
     "pytest",
     "ruff",
-    "pre-commit",
+    "pre-commit"
 ]
 
 [tool.uv]
@@ -70,6 +70,7 @@ dev = [
     "pip-audit>=2.6.0",
     "ruff>=0.14.0",
     "pre-commit>=4.0.0",
+    "debugpy>=1.8.19",
 ]
 
 # [tool.uv.sources]

@@ -76,16 +76,6 @@
             "internalConsoleOptions": "neverOpen"
         },
         {
-            "name": "LaunchM365Server",
-            "type": "debugpy",
-            "request": "launch",
-            "cwd":"${workspaceFolder}",
-            "program": "${workspaceFolder}/src/spec_to_agents/m365_server.py",
-            "python": "${command:python.interpreterPath}",
-            "console": "integratedTerminal",
-            "preLaunchTask": "uv_sync"            
-        },
-        {
             "name": "Launch Remote in Teams (Desktop)",
             "type": "debugpy",
             "request": "launch",
@@ -204,7 +194,7 @@
         {
             "name": "Debug in Microsoft 365 Agents Playground",
             "configurations": [
-                "LaunchM365Server"
+                "Attach to Local Service"
             ],
             "preLaunchTask": "Start App in Microsoft 365 Agents Playground",
             "presentation": {
