@@ -25,11 +25,15 @@ dependencies = [
     "opentelemetry-exporter-otlp-proto-grpc",
     "opentelemetry-semantic-conventions-ai",
     "dependency-injector>=4.48.2",
+    # Microsoft 365 Agents SDK
+    "microsoft-agents-hosting-core>=0.6.0",
+    "microsoft-agents-hosting-aiohttp>=0.6.0",
 ]
 
 [project.scripts]
 app = "spec_to_agents.main:main"
 console = "spec_to_agents.console:cli"
+m365-server = "spec_to_agents.m365_server:cli"
 
 
 [project.optional-dependencies]
