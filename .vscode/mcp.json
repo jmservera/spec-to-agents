@@ -11,18 +11,34 @@
     "context7": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "@upstash/context7-mcp"]
+      "args": [
+        "-y",
+        "@upstash/context7-mcp"
+      ]
     },
     "playwright": {
       "command": "npx",
-      "args": ["@playwright/mcp@latest"]
+      "args": [
+        "@playwright/mcp@latest"
+      ]
     },
     "sequential-thinking-tools": {
       "command": "npx",
-      "args": ["-y", "mcp-sequentialthinking-tools"],
+      "args": [
+        "-y",
+        "mcp-sequentialthinking-tools"
+      ],
       "env": {
         "MAX_HISTORY_SIZE": "1000"
       }
+    },
+    "M365AgentsToolkit MCP Server": {
+      "command": "npx",
+      "args": [
+        "@microsoft/m365agentstoolkit-mcp@latest",
+        "server",
+        "start"
+      ]
     }
   }
 }

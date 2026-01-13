@@ -45,3 +45,5 @@ resource botServiceMsTeamsChannel 'Microsoft.BotService/botServices/channels@202
 }
 
 output botResourceId string = botService.id
+output identityTenantId string = identity.properties.tenantId
+output identityClientId string = identity.properties.clientId 

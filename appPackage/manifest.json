@@ -14,12 +14,12 @@
         "outline": "outline.png"
     },
     "name": {
-        "short": "testcustom01${{APP_NAME_SUFFIX}}",
-        "full": "full name for testcustom01"
+        "short": "spec-to-agents${{APP_NAME_SUFFIX}}",
+        "full": "full name for spec-to-agents"
     },
     "description": {
-        "short": "short description for testcustom01",
-        "full": "full description for testcustom01"
+        "short": "short description for spec-to-agents",
+        "full": "full description for spec-to-agents"
     },
     "accentColor": "#FFFFFF",
     "copilotAgents": {

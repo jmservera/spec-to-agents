@@ -102,10 +102,9 @@ var resourceToken = toLower(uniqueString(subscription().id, environmentName, loc
 var tags = { 'azd-env-name': environmentName }
 
 // Organize resources in a resource group
-resource rg 'Microsoft.Resources/resourceGroups@2021-04-01' = {
+resource rg 'Microsoft.Resources/resourceGroups@2021-04-01' existing = {
   name: !empty(resourceGroupName) ? resourceGroupName : '${abbrs.resourcesResourceGroups}${environmentName}'
-  location: location
-  tags: tags
+
 }
 
 // =================================================================
@@ -459,6 +458,9 @@ output BING_ACCOUNT_NAME string = aiFoundry.outputs.bingAccountName
 @description('The login server for the Azure Container Registry.')
 output AZURE_CONTAINER_REGISTRY_ENDPOINT string = containerRegistry.outputs.loginServer
 
+@description('The name of the Azure Container Registry.')
+output AZURE_CONTAINER_REGISTRY_NAME string = containerRegistry.outputs.name
+
 @description('Name of the deployed unified application.')
 output AZURE_APP_NAME string = app.outputs.SERVICE_APP_NAME
 
@@ -486,5 +488,14 @@ output APPLICATIONINSIGHTS_CONNECTION_STRING string = monitoring.outputs.applica
 @description('The Azure OpenAI API version to use.')
 output AZURE_OPENAI_API_VERSION string = 'preview'
 
-@description('The resource ID of the registered Bot Framework bot.')
-output BOT_AZURE_APP_SERVICE_RESOURCE_ID string = azureBotRegistration.outputs.botResourceId
+@description('The resource ID of the Bot application.')
+output BOT_AZURE_APP_SERVICE_RESOURCE_ID string = bot.outputs.resourceId
+
+@description('The domain of the Bot application.')
+output BOT_DOMAIN string = bot.outputs.SERVICE_APP_URI
+
+@description('The Client ID of the Bot managed identity.')
+output BOT_ID string = azureBotRegistration.outputs.identityClientId
+
+@description('The Tenant ID of the Bot managed identity.')
+output BOT_TENANT_ID string = azureBotRegistration.outputs.identityTenantId

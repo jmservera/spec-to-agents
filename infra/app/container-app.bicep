@@ -57,3 +57,4 @@ module containerApp 'br/public:avm/res/app/container-app:0.11.0' = {
 output SERVICE_APP_NAME string = containerApp.outputs.name
 output SERVICE_APP_URI string = containerApp.outputs.fqdn
 output SERVICE_APP_IDENTITY_PRINCIPAL_ID string = contains(identityType, 'SystemAssigned') ? containerApp.outputs.systemAssignedMIPrincipalId : ''
+output resourceId string = containerApp.outputs.resourceId
