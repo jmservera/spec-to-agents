@@ -13,6 +13,18 @@ services:
     docker:
       path: ./Dockerfile
       context: ./
+      buildArgs:
+        - APP_CMD=app
+      remoteBuild: true
+  bot:
+    project: ./
+    language: py
+    host: containerapp
+    docker:
+      path: ./Dockerfile
+      context: ./
+      buildArgs:
+        - APP_CMD="m365-server"
       remoteBuild: true
 
 # Infrastructure as Code

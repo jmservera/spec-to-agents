@@ -8,6 +8,8 @@ This module provides an HTTP server endpoint using the Microsoft 365 Agents SDK
 agent. It handles incoming messages via the Activity protocol and integrates with
 Teams, M365 Copilot, and other Microsoft platforms.
 
+Implementation example: https://learn.microsoft.com/en-us/microsoft-365/agents-sdk/quickstart?pivots=python
+
 Pattern
 -------
 This follows the Microsoft 365 Agents SDK hosting pattern:
@@ -114,9 +116,7 @@ async def start_server(
         return await start_agent_process(req, agent, adapter)
 
     # Create aiohttp application with JWT middleware
-    app = Application(
-        middlewares=[jwt_authorization_middleware] if auth_configuration else []
-    )
+    app = Application(middlewares=[jwt_authorization_middleware])
 
     # Register routes
     app.router.add_post("/api/messages", entry_point)
@@ -127,9 +127,8 @@ async def start_server(
     
     app.router.add_get("/api/messages", health_check)
 
-    # Store agent configuration in app state
-    if auth_configuration:
-        app["agent_configuration"] = auth_configuration
+    # Store agent configuration in app state (required by jwt_authorization_middleware)
+    app["agent_configuration"] = auth_configuration
     app["agent_app"] = agent_application
     app["adapter"] = agent_application.adapter
 
@@ -280,6 +279,9 @@ async def _build_and_start_agent() -> None:
     """
     # Create agent application with storage and adapter
     storage = MemoryStorage()
+    
+    # CloudAdapter() with no parameters runs in anonymous mode for local development
+    # Production deployments should configure with proper authentication
     adapter = CloudAdapter()
 
     agent_app = AgentApplication[WorkflowTurnState](
@@ -289,11 +291,34 @@ async def _build_and_start_agent() -> None:
 
     # Register activity handlers
 
+    @agent_app.activity("installationUpdate")
+    async def on_installation_update(
+        context: TurnContext, state: WorkflowTurnState
+    ) -> None:
+        """Handle installation updates (e.g., bot installed)."""
+        # Ensure state has our custom attributes
+        if not hasattr(state, 'pending_requests'):
+            state.pending_requests = {}  # type: ignore
+        if not hasattr(state, 'workflow_output'):
+            state.workflow_output = None  # type: ignore
+        if not hasattr(state, 'is_workflow_complete'):
+            state.is_workflow_complete = False  # type: ignore
+        # Installation events don't require a response
+        pass
+
     @agent_app.activity("conversationUpdate")
     async def on_conversation_update(
         context: TurnContext, state: WorkflowTurnState
     ) -> None:
         """Handle conversation updates (e.g., member added)."""
+        # Ensure state has our custom attributes (SDK may pass base TurnState)
+        if not hasattr(state, 'pending_requests'):
+            state.pending_requests = {}  # type: ignore
+        if not hasattr(state, 'workflow_output'):
+            state.workflow_output = None  # type: ignore
+        if not hasattr(state, 'is_workflow_complete'):
+            state.is_workflow_complete = False  # type: ignore
+            
         if context.activity.members_added:
             for member in context.activity.members_added:
                 if member.id != context.activity.recipient.id:
@@ -333,6 +358,14 @@ async def _build_and_start_agent() -> None:
         This is the main entry point for processing user messages. It executes
         the event planning workflow and manages conversation state.
         """
+        # Ensure state has our custom attributes (SDK may pass base TurnState)
+        if not hasattr(state, 'pending_requests'):
+            state.pending_requests = {}  # type: ignore
+        if not hasattr(state, 'workflow_output'):
+            state.workflow_output = None  # type: ignore
+        if not hasattr(state, 'is_workflow_complete'):
+            state.is_workflow_complete = False  # type: ignore
+        
         user_message = context.activity.text or ""
 
         if not user_message.strip():

@@ -42,8 +42,10 @@ param location string
 
 // Infrastructure resource parameters
 param containerAppName string = ''
+param botContainerAppName string = ''
 param containerRegistryName string = ''
 param appUserAssignedIdentityName string = ''
+param botUserAssignedIdentityName string = ''
 param applicationInsightsName string = ''
 param logAnalyticsName string = ''
 param resourceGroupName string = ''
@@ -151,6 +153,16 @@ module appUserAssignedIdentity 'br/public:avm/res/managed-identity/user-assigned
   }
 }
 
+module botUserAssignedIdentity 'br/public:avm/res/managed-identity/user-assigned-identity:0.4.1' = {
+  name: 'botUserAssignedIdentity'
+  scope: rg
+  params: {
+    location: location
+    tags: tags
+    name: !empty(botUserAssignedIdentityName) ? botUserAssignedIdentityName : '${abbrs.managedIdentityUserAssignedIdentities}bot-${resourceToken}'
+  }
+}
+
 // Monitor application with Azure Monitor
 module monitoring 'app/monitoring.bicep' = {
   name: 'monitoring'
@@ -188,6 +200,16 @@ module acrRoleAssignment 'app/rbac/acr-access.bicep' = {
   }
 }
 
+module acrRoleAssignmentBot 'app/rbac/acr-access.bicep' = {
+  name: 'acr-rbac-bot-${resourceToken}'
+  scope: rg
+  params: {
+    containerRegistryName: containerRegistry.outputs.name
+    roleDefinitionID: AcrPullRole
+    principalID: botUserAssignedIdentity.outputs.principalId
+  }
+}
+
 // Grant Azure AI User role to the logged-in user (for development)
 var AzureAIUserRole = '53ca6127-db72-4b80-b1b0-d745d6d5456d'
 module aiFoundryRoleAssignmentUser 'app/rbac/ai-foundry-access.bicep' = if (!empty(principalId)) {
@@ -201,18 +223,110 @@ module aiFoundryRoleAssignmentUser 'app/rbac/ai-foundry-access.bicep' = if (!emp
   }
 }
 
+module aca './app/container-apps-environment.bicep' = {
+  name: 'containerappsenv-${resourceToken}'
+  scope: rg
+  params: {
+    resourceToken: resourceToken
+    location: location
+    tags: tags
+    applicationInsightsName: monitoring.outputs.applicationInsightsName
+  }
+}
+
 // Unified Application - Container App with backend and frontend
 module app './app/container-app.bicep' = {
-  name: 'containerapp-${resourceToken}'
+  name: 'containerapp-web-${resourceToken}'
   scope: rg
   params: {
     name: !empty(containerAppName) ? containerAppName : '${abbrs.appContainerApps}${resourceToken}'
     location: location
     tags: tags
     serviceName: 'app' // azd service name
-    resourceToken: resourceToken
-    applicationInsightsName: monitoring.outputs.applicationInsightsName
+    containerAppsEnvironmentId: aca.outputs.environmentId
     identityId: appUserAssignedIdentity.outputs.resourceId
+    identityType: 'SystemAssigned,UserAssigned'
+    containerRegistryName: containerRegistry.outputs.name
+    appSettings: [
+      // AI Project configuration
+      {
+        name: 'AZURE_AI_ACCOUNT_NAME'
+        value: aiFoundry.outputs.accountName
+      }
+      {
+        name: 'AZURE_AI_PROJECT_NAME'
+        value: aiFoundry.outputs.projectName
+      }
+      {
+        name: 'AZURE_AI_PROJECT_ENDPOINT'
+        value: '${aiFoundry.outputs.accountEndpoint}api/projects/${aiFoundry.outputs.projectName}'
+      }
+      {
+        name: 'AZURE_AI_MODEL_DEPLOYMENT_NAME'
+        value: aiFoundry.outputs.modelDeploymentName
+      }
+      {
+        name: 'WEB_SEARCH_MODEL'
+        value: aiFoundry.outputs.webSearchModelDeploymentName
+      }
+      {
+        name: 'AZURE_OPENAI_API_VERSION'
+        value: '2025-01-01-preview'
+      }
+      {
+        name: 'BING_CONNECTION_ID'
+        value: aiFoundry.outputs.bingConnectionId
+      }
+      {
+        name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
+        value: monitoring.outputs.applicationInsightsConnectionString
+      }
+      {
+        name: 'CALENDAR_STORAGE_PATH'
+        value: './data/calendars'
+      }
+      {
+        name: 'MAX_HISTORY_SIZE'
+        value: '1000'
+      }
+      {
+        name: 'ENABLE_OTEL'
+        value: 'true'
+      }
+      {
+        name: 'ENABLE_SENSITIVE_DATA'
+        value: 'true'
+      }
+      // Container environment settings
+      {
+        name: 'ENVIRONMENT'
+        value: 'production'
+      }
+      {
+        name: 'PORT'
+        value: '8080'
+      }
+      {
+        name: 'CONTAINER_ENV'
+        value: 'true'
+      }
+    ]
+  }
+  dependsOn: [
+    acrRoleAssignment
+  ]
+}
+
+module bot './app/container-app.bicep' = {
+  name: 'containerapp-bot-${resourceToken}'
+  scope: rg
+  params: {
+    name: !empty(botContainerAppName) ? botContainerAppName : '${abbrs.appContainerApps}bot-${resourceToken}'
+    location: location
+    tags: tags
+    serviceName: 'bot' // azd service name
+    containerAppsEnvironmentId: aca.outputs.environmentId
+    identityId: botUserAssignedIdentity.outputs.resourceId
     identityType: 'SystemAssigned,UserAssigned'
     containerRegistryName: containerRegistry.outputs.name
     appSettings: [
@@ -295,9 +409,27 @@ module aiFoundryRoleAssignmentSystemIdentity 'app/rbac/ai-foundry-access.bicep' 
     roleDefinitionID: AzureAIUserRole
     principalID: app.outputs.SERVICE_APP_IDENTITY_PRINCIPAL_ID
   }
-  dependsOn: [
-    app
-  ]
+}
+
+module botAiFoundryRoleAssignmentSystemIdentity 'app/rbac/ai-foundry-access.bicep' = {
+  name: 'ai-foundry-system-bot-identity-rbac-${resourceToken}'
+  scope: rg
+  params: {
+    aiAccountName: aiFoundry.outputs.accountName
+    roleDefinitionID: AzureAIUserRole
+    principalID: bot.outputs.SERVICE_APP_IDENTITY_PRINCIPAL_ID
+  }
+}
+
+// Register your web service as a bot with the Bot Framework
+module azureBotRegistration './botRegistration/azurebot.bicep' = {
+  name: 'Azure-Bot-registration'
+  scope: rg
+  params: {
+    resourceBaseName: 'bot-${resourceToken}'
+    botAppDomain: bot.outputs.SERVICE_APP_URI
+    botDisplayName: 'bot-${resourceToken}'
+  }
 }
 
 // ==================================
@@ -333,6 +465,12 @@ output AZURE_APP_NAME string = app.outputs.SERVICE_APP_NAME
 @description('URL of the deployed unified application.')
 output AZURE_APP_URI string = app.outputs.SERVICE_APP_URI
 
+@description('Name of the deployed unified application.')
+output AZURE_BOT_NAME string = bot.outputs.SERVICE_APP_NAME
+
+@description('URL of the deployed unified application.')
+output AZURE_BOT_URI string = bot.outputs.SERVICE_APP_URI
+
 @description('The full project endpoint URL for Microsoft Foundry.')
 output AZURE_AI_PROJECT_ENDPOINT string = '${aiFoundry.outputs.accountEndpoint}api/projects/${aiFoundry.outputs.projectName}'
 
@@ -347,3 +485,6 @@ output APPLICATIONINSIGHTS_CONNECTION_STRING string = monitoring.outputs.applica
 
 @description('The Azure OpenAI API version to use.')
 output AZURE_OPENAI_API_VERSION string = 'preview'
+
+@description('The resource ID of the registered Bot Framework bot.')
+output BOT_AZURE_APP_SERVICE_RESOURCE_ID string = azureBotRegistration.outputs.botResourceId

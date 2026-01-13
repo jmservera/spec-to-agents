@@ -34,7 +34,7 @@ COPY . /app
 RUN uv sync --frozen --no-dev
 
 # Final runtime stage - use slim Python image
-FROM python:3.12-slim-bookworm
+FROM python:3.12-slim-bookworm as runtime-base
 
 # Set working directory
 WORKDIR /app
@@ -68,7 +68,10 @@ ENV CONTAINER_ENV=true
 ENV ENVIRONMENT=production
 
 # Expose port 8080 (Azure Container Apps default)
-EXPOSE 8080
+EXPOSE ${PORT}
 
 # Run the application using uv run (just like locally)
-CMD ["uv", "run", "app"]
+
+# App variant
+ARG APP_CMD="app"
+CMD ["uv", "run", "${APP_CMD}"]
