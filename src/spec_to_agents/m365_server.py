@@ -31,12 +31,14 @@ Architecture
 """
 
 import asyncio
+import json
 import sys
 import time
 import traceback
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from os import environ
+from pathlib import Path
 
 from aiohttp.web import Application, AppRunner, Request, Response, TCPSite
 from dotenv import load_dotenv
@@ -64,6 +66,8 @@ from agent_framework import (
 from spec_to_agents.container import AppContainer
 from spec_to_agents.models.messages import HumanFeedbackRequest
 from spec_to_agents.workflow.core import build_event_planning_workflow, get_checkpoint_storage
+
+
 
 # Load environment variables at module import
 load_dotenv()
@@ -165,14 +169,85 @@ async def start_server(
 
 from microsoft_agents.activity import (
     Activity,
-    ActivityTypes)
-counter = 0
+    ActivityTypes,
+    Attachment,
+    AttachmentData,
+)
+
+
 async def send_typing(context: TurnContext) -> None:
-    global counter
+    """Send a typing indicator to the user."""
+    typingActivity = Activity(type=ActivityTypes.typing)
+    await context.send_activity(typingActivity)
 
-    typingActivity = Activity(type= ActivityTypes.typing)
-    await context.send_activity(typingActivity)  # Typing indicator
 
+def generate_context_card(
+    agent_name: str,
+    summary: str,
+    next_agent: str | None,
+    user_input_needed: bool,
+) -> Attachment|None:
+    """
+    Send an adaptive card showing the agent's current thinking context.
+
+    Parameters
+    ----------
+    agent_name : str
+        The name of the agent requesting input
+    summary : str
+        Summary of the agent's current analysis/recommendations
+    next_agent : str | None
+        The next agent to consult (if any)
+    user_input_needed : bool
+        Whether user input is needed
+    """
+    try:
+        # Load adaptive card template
+        card_path = Path(__file__).parent / "adaptive_cards" / "agent_context_card.json"
+        with open(card_path, "r", encoding="utf-8") as f:
+            card_template = json.load(f)
+
+        # Prepare data for card
+        # Format agent name nicely
+        formatted_agent_name = agent_name.replace("_", " ").title()
+        
+        # Format next agent
+        formatted_next_agent = (
+            next_agent.replace("_", " ").title() if next_agent else "None"
+        )
+        
+        # Status based on user_input_needed
+        status = "⏸️ Waiting for input" if user_input_needed else "✅ Processing"
+        
+        # Show next agent section only if next_agent is not None
+        show_next_agent = next_agent is not None
+
+        # Replace template variables (simple string replacement)
+        card_json = json.dumps(card_template)
+        card_json = card_json.replace("${agent_name}", formatted_agent_name)
+        card_json = card_json.replace("${summary}", summary)
+        card_json = card_json.replace("${next_agent}", formatted_next_agent)
+        card_json = card_json.replace("${status}", status)
+        card_json = card_json.replace("${show_next_agent}", str(show_next_agent).lower())
+        card_data = json.loads(card_json)
+
+        # Create attachment
+        attachment = Attachment(
+            content_type="application/vnd.microsoft.card.adaptive",
+            content=card_data,
+        )
+
+        # Create activity with attachment
+        return attachment
+
+        # Send the card
+
+    except Exception as e:
+        print(f"⚠️  Could not send agent context card: {e}")
+        traceback.print_exc()
+    return None
+
+# see how to stream: https://microsoft.github.io/teams-sdk/python/essentials/sending-messages/
 async def _execute_workflow(
     context: TurnContext, state: WorkflowTurnState, user_message: str
 ) -> None:
@@ -197,6 +272,11 @@ async def _execute_workflow(
     user_message : str
         The user's message or response to process
     """
+
+    print("🚀 Executing event planning workflow...")
+    print("Streaming enabled: ", context.streaming_response._is_streaming_channel)
+    context.streaming_response.queue_informative_update("Starting workflow execution...")
+
     try:
         # Get or create workflow instance for this conversation
         # CRITICAL: We must reuse the same workflow + agent instances to preserve
@@ -250,6 +330,8 @@ async def _execute_workflow(
             "logistics": "📅 Logistics Manager",
             "coordinator": "🎯 Event Coordinator"
         }
+
+        context.streaming_response.queue_informative_update("Starting workflow streaming...")
         
         async for event in stream:
             # Send typing indicator at most once per second
@@ -267,9 +349,8 @@ async def _execute_workflow(
             # M365 Copilot expects responses within ~20-30 seconds
             if current_time - last_progress_message_time >= 45.0:
                 try:
-                    await context.send_activity(
-                        "⏳ Still working on your event plan... This may take a moment as I coordinate with specialist agents."
-                    )
+                    context.streaming_response.queue_informative_update("⏳ Still working on your event plan... This may take a moment as I coordinate with specialist agents.")
+                    # context.streaming_response.queue_text_chunk("⏳ Still working on your event plan... This may take a moment as I coordinate with specialist agents.")
                     print("📨 Sent progress update message")
                     last_progress_message_time = current_time
                 except Exception as e:
@@ -292,20 +373,18 @@ async def _execute_workflow(
                     # Map agent name to friendly display name
                     display_name = agent_names.get(agent_name, f"🤖 {agent_name.title()}")
                     try:
-                        await context.send_activity(f"Consulting with {display_name}...")
+                        context.streaming_response.queue_informative_update(f"Consulting with {display_name}...")
                         print(f"👤 Notified user about agent: {display_name}")
                         last_notified_agent = agent_name
                     except Exception as e:
                         print(f"⚠️  Could not send agent notification: {e}")
 
             # Handle human-in-the-loop requests
-            elif isinstance(event, RequestInfoEvent) and isinstance(
-                event.data, HumanFeedbackRequest
-            ):
+            elif isinstance(event, RequestInfoEvent) and isinstance(event.data, HumanFeedbackRequest):
                 # Workflow is requesting human input - capture checkpoint for HITL resume
                 feedback_request: HumanFeedbackRequest = event.data
                 state.pending_requests[event.request_id] = feedback_request
-                
+
                 # Capture checkpoint for HITL restoration
                 checkpoint_storage = get_checkpoint_storage()
                 checkpoints = await checkpoint_storage.list_checkpoints()
@@ -314,12 +393,48 @@ async def _execute_workflow(
                     state.checkpoint_id = checkpoints[0].checkpoint_id
                     print(f"💾 Captured HITL checkpoint: {state.checkpoint_id}")
 
+                # Try to extract context from last conversation message
+                summary = None
+                next_agent = None
+                user_input_needed = True
+                
+                if feedback_request.conversation and len(feedback_request.conversation) > 0:
+                    last_message = feedback_request.conversation[-1]
+                    
+                    # Check if last message has content with text containing JSON
+                    try:
+                        # Get the text from the content
+                        content_text = None
+                        if hasattr(last_message, 'text'):
+                            content_text = last_message.text
+                        
+                        if content_text:
+                            # Try to parse as JSON
+                            context_data = json.loads(content_text)
+                            summary = context_data.get("summary")
+                            next_agent = context_data.get("next_agent")
+                            user_input_needed = context_data.get("user_input_needed", True)
+                            print(f"📝 Extracted context from last message: summary={bool(summary)}, next_agent={next_agent}")
+                    except (json.JSONDecodeError, AttributeError) as e:
+                        print(f"⚠️  Could not parse last message content as JSON: {e}")
+
+                # Send adaptive card with agent context if we have summary
+                if summary:
+                    card=generate_context_card(
+                        agent_name=feedback_request.requesting_agent,
+                        summary=summary,
+                        next_agent=next_agent,
+                        user_input_needed=user_input_needed,
+                    )
+                    if card:
+                        context.streaming_response.set_attachments([card])
                 # Send prompt to user
                 prompt_message = (
-                    f"**{feedback_request.requesting_agent.title()} needs your input:**\n\n"
+                    f"**{feedback_request.requesting_agent.replace('_', ' ').title()} needs your input:**\n\n"
                     f"{feedback_request.prompt}"
                 )
-                await context.send_activity(prompt_message)
+                context.streaming_response.queue_text_chunk(prompt_message)
+                await context.streaming_response.end_stream()
 
             # Handle final workflow output
             elif isinstance(event, WorkflowOutputEvent):

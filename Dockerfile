@@ -40,18 +40,12 @@ FROM python:3.12-slim-bookworm AS runtime-base
 WORKDIR /app
 
 # Install Node.js (required for MCP tools) and uv
-ARG UV_VERSION=0.5.11
-ENV UV_VERSION=${UV_VERSION}
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     ca-certificates \
     && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
-    && curl -LsSf https://astral.sh/uv/${UV_VERSION}/install.sh | sh \
     && rm -rf /var/lib/apt/lists/*
-
-# Add uv to PATH
-ENV PATH="/root/.local/bin:$PATH"
 
 # Copy the virtual environment from the builder
 COPY --from=builder /app/.venv /app/.venv

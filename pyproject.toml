@@ -29,8 +29,7 @@ dependencies = [
     "microsoft-agents-hosting-core>=0.6.0",
     "microsoft-agents-hosting-aiohttp>=0.6.0",
     "microsoft-agents-authentication-msal>=0.7.0.dev12",
-    "microsoft-agents-activity>=0.7.0.dev12",
-    "adaptive-cards-python>=0.1.11",
+    "microsoft-agents-activity>=0.7.0.dev12"
 ]
 
 [project.scripts]
