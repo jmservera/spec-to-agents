@@ -34,13 +34,14 @@ COPY . /app
 RUN uv sync --frozen --no-dev
 
 # Final runtime stage - use slim Python image
-FROM python:3.12-slim-bookworm as runtime-base
+FROM python:3.12-slim-bookworm AS runtime-base
 
 # Set working directory
 WORKDIR /app
 
 # Install Node.js (required for MCP tools) and uv
-ENV UV_VERSION=0.5.11
+ARG UV_VERSION=0.5.11
+ENV UV_VERSION=${UV_VERSION}
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     ca-certificates \
@@ -70,8 +71,14 @@ ENV ENVIRONMENT=production
 # Expose port 8080 (Azure Container Apps default)
 EXPOSE ${PORT}
 
-# Run the application using uv run (just like locally)
+# Run the application directly with Python (no uv run to avoid re-syncing)
+# The virtual environment is already in PATH, so Python will use it
 
-# App variant
+# App variant - map to actual Python module commands
 ARG APP_CMD="app"
-CMD ["uv", "run", "${APP_CMD}"]
+ENV APP_CMD=${APP_CMD}
+
+# Use exec form with shell to interpret the command
+# For "app": python -m spec_to_agents.main
+# For "m365": python -m spec_to_agents.m365_server
+CMD ["sh", "-c", "case $APP_CMD in app) exec python -m spec_to_agents.main ;; m365-server) exec python -m spec_to_agents.m365_server ;; *) exec python -m spec_to_agents.$APP_CMD ;; esac"]

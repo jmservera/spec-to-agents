@@ -142,7 +142,7 @@ module aiFoundry './app/ai-foundry.bicep' = {
 // =================================================================
 
 // User assigned managed identity for the app
-module appUserAssignedIdentity 'br/public:avm/res/managed-identity/user-assigned-identity:0.4.1' = {
+module appUserAssignedIdentity 'br/public:avm/res/managed-identity/user-assigned-identity:0.5.0' = {
   name: 'appUserAssignedIdentity'
   scope: rg
   params: {
@@ -152,13 +152,25 @@ module appUserAssignedIdentity 'br/public:avm/res/managed-identity/user-assigned
   }
 }
 
-module botUserAssignedIdentity 'br/public:avm/res/managed-identity/user-assigned-identity:0.4.1' = {
+module botUserAssignedIdentity 'br/public:avm/res/managed-identity/user-assigned-identity:0.5.0' = {
   name: 'botUserAssignedIdentity'
   scope: rg
   params: {
     location: location
     tags: tags
     name: !empty(botUserAssignedIdentityName) ? botUserAssignedIdentityName : '${abbrs.managedIdentityUserAssignedIdentities}bot-${resourceToken}'
+  }
+}
+
+// Register your web service as a bot with the Bot Framework
+module azureBotRegistration './botRegistration/azurebot.bicep' = {
+  name: 'Azure-Bot-registration'
+  scope: rg
+  params: {
+    botUserAssignedIdentityName: botUserAssignedIdentity.outputs.name
+    resourceBaseName: 'bot-${resourceToken}'
+    botAppDomain: bot.outputs.SERVICE_APP_URI
+    botDisplayName: 'bot-${resourceToken}'
   }
 }
 
@@ -244,7 +256,6 @@ module app './app/container-app.bicep' = {
     serviceName: 'app' // azd service name
     containerAppsEnvironmentId: aca.outputs.environmentId
     identityId: appUserAssignedIdentity.outputs.resourceId
-    identityType: 'SystemAssigned,UserAssigned'
     containerRegistryName: containerRegistry.outputs.name
     appSettings: [
       // AI Project configuration
@@ -308,6 +319,34 @@ module app './app/container-app.bicep' = {
       {
         name: 'CONTAINER_ENV'
         value: 'true'
+      }
+      {
+        name: 'BOT_ID'
+        value: botUserAssignedIdentity.outputs.clientId
+      }
+      {
+        name: 'CONNECTIONS__SERVICE_CONNECTION__SETTINGS__CLIENTID'
+        value: botUserAssignedIdentity.outputs.clientId
+      }
+      {
+        name: 'CONNECTIONS__SERVICE_CONNECTION__SETTINGS__TENANTID'
+        value: subscription().tenantId
+      }
+      {
+        name: 'CONNECTIONS__SERVICE_CONNECTION__SETTINGS__AUTHTYPE'
+        value: 'UserManagedIdentity'
+      }
+      {
+        name: 'AZURE_CLIENT_ID'
+        value: botUserAssignedIdentity.outputs.clientId
+      }
+      {
+        name: 'AZURE_TENANT_ID'
+        value: subscription().tenantId
+      }
+      {
+        name: 'CONNECTIONS__SERVICE_CONNECTION__SETTINGS__FEDERATEDCLIENTID'
+        value: botUserAssignedIdentity.outputs.resourceId
       }
     ]
   }
@@ -326,7 +365,6 @@ module bot './app/container-app.bicep' = {
     serviceName: 'bot' // azd service name
     containerAppsEnvironmentId: aca.outputs.environmentId
     identityId: botUserAssignedIdentity.outputs.resourceId
-    identityType: 'SystemAssigned,UserAssigned'
     containerRegistryName: containerRegistry.outputs.name
     appSettings: [
       // AI Project configuration
@@ -391,6 +429,34 @@ module bot './app/container-app.bicep' = {
         name: 'CONTAINER_ENV'
         value: 'true'
       }
+    {
+        name: 'BOT_ID'
+        value: botUserAssignedIdentity.outputs.clientId
+      }
+      {
+        name: 'CONNECTIONS__SERVICE_CONNECTION__SETTINGS__CLIENTID'
+        value: botUserAssignedIdentity.outputs.clientId
+      }
+      {
+        name: 'CONNECTIONS__SERVICE_CONNECTION__SETTINGS__TENANTID'
+        value: subscription().tenantId
+      }
+      {
+        name: 'CONNECTIONS__SERVICE_CONNECTION__SETTINGS__AUTHTYPE'
+        value: 'UserManagedIdentity'
+      }
+      {
+        name: 'AZURE_CLIENT_ID'
+        value: botUserAssignedIdentity.outputs.clientId
+      }
+      {
+        name: 'AZURE_TENANT_ID'
+        value: subscription().tenantId
+      }
+      {
+        name: 'CONNECTIONS__SERVICE_CONNECTION__SETTINGS__FEDERATEDCLIENTID'
+        value: botUserAssignedIdentity.outputs.resourceId
+      }
     ]
   }
   dependsOn: [
@@ -406,7 +472,7 @@ module aiFoundryRoleAssignmentSystemIdentity 'app/rbac/ai-foundry-access.bicep' 
   params: {
     aiAccountName: aiFoundry.outputs.accountName
     roleDefinitionID: AzureAIUserRole
-    principalID: app.outputs.SERVICE_APP_IDENTITY_PRINCIPAL_ID
+    principalID: appUserAssignedIdentity.outputs.principalId
   }
 }
 
@@ -416,20 +482,11 @@ module botAiFoundryRoleAssignmentSystemIdentity 'app/rbac/ai-foundry-access.bice
   params: {
     aiAccountName: aiFoundry.outputs.accountName
     roleDefinitionID: AzureAIUserRole
-    principalID: bot.outputs.SERVICE_APP_IDENTITY_PRINCIPAL_ID
+    principalID: botUserAssignedIdentity.outputs.principalId
   }
 }
 
-// Register your web service as a bot with the Bot Framework
-module azureBotRegistration './botRegistration/azurebot.bicep' = {
-  name: 'Azure-Bot-registration'
-  scope: rg
-  params: {
-    resourceBaseName: 'bot-${resourceToken}'
-    botAppDomain: bot.outputs.SERVICE_APP_URI
-    botDisplayName: 'bot-${resourceToken}'
-  }
-}
+
 
 // ==================================
 // Outputs
@@ -495,7 +552,7 @@ output BOT_AZURE_APP_SERVICE_RESOURCE_ID string = bot.outputs.resourceId
 output BOT_DOMAIN string = bot.outputs.SERVICE_APP_URI
 
 @description('The Client ID of the Bot managed identity.')
-output BOT_ID string = azureBotRegistration.outputs.identityClientId
+output BOT_ID string = botUserAssignedIdentity.outputs.clientId
 
 @description('The Tenant ID of the Bot managed identity.')
-output BOT_TENANT_ID string = azureBotRegistration.outputs.identityTenantId
+output BOT_TENANT_ID string = subscription().tenantId

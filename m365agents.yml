@@ -10,11 +10,10 @@ provision:
   # - uses: script
   #   name: set environment variables
   #   with:
-  #     run: $AZURE_PRINCIPAL_ID=(az ad signed-in-user show --query id -o tsv);
-  #       echo $AZURE_PRINCIPAL_ID;
-  #       echo "::set-teamsfx-env
-  #       AZURE_PRINCIPAL_ID=${AZURE_PRINCIPAL_ID}"
-
+  #     run: |
+  #       $AZUREPRINCIPALID = az ad signed-in-user show --query id -o tsv
+  #       Write-Host "::set-teamsfx-env AZURE_PRINCIPAL_ID=$AZUREPRINCIPALID"
+  #     shell: pwsh
 
   # Creates an app
   - uses: teamsApp/create
@@ -92,9 +91,9 @@ deploy:
     name: set environment variables
     with:
       run: echo "::set-teamsfx-env
-        AZURE_CONTAINER_IMAGE_APP=${{AZURE_CONTAINER_REGISTRY_ENDPOINT}}/app";
+        AZURE_CONTAINER_IMAGE_APP=${{AZURE_CONTAINER_REGISTRY_ENDPOINT}}/app:latest";
         echo "::set-teamsfx-env
-        AZURE_CONTAINER_IMAGE_BOT=${{AZURE_CONTAINER_REGISTRY_ENDPOINT}}/bot"
+        AZURE_CONTAINER_IMAGE_BOT=${{AZURE_CONTAINER_REGISTRY_ENDPOINT}}/bot:latest"
 
   - uses: script  
     name: build container image 1
@@ -106,14 +105,15 @@ deploy:
     name: deploy container image
     with:
       run: |
-        az containerapp up -n ${{AZURE_APP_NAME}} --image ${{AZURE_CONTAINER_IMAGE_APP}}
-        az containerapp up -n ${{AZURE_BOT_NAME}} --image ${{AZURE_CONTAINER_IMAGE_BOT}}
-        # --env-vars "clientId=secretref:bot-id"
-        # "tenantId=secretref:bot-tenant-id" "BOT_TYPE=secretref:bot-type" "BOT_DOMAIN=${{BOT_DOMAIN}}"
-        # "AAD_APP_CLIENT_ID=secretref:aad-app-client-id"
-        # "AAD_APP_CLIENT_SECRET=secretref:aad-app-client-secret"
-        # "AAD_APP_TENANT_ID=secretref:aad-app-tenant-id"
-        # "AAD_APP_OAUTH_AUTHORITY_HOST=secretref:aad-app-oauth-authority-host"
+        az containerapp update -n ${{AZURE_APP_NAME}} --image ${{AZURE_CONTAINER_IMAGE_APP}} -g ${{AZURE_RESOURCE_GROUP_NAME}} --revision-suffix ([int](Get-Date -UFormat %s -Millisecond 0));
+        az containerapp update -n ${{AZURE_BOT_NAME}} --image ${{AZURE_CONTAINER_IMAGE_BOT}} -g ${{AZURE_RESOURCE_GROUP_NAME}} --revision-suffix ([int](Get-Date -UFormat %s -Millisecond 0))
+
+# --env-vars "clientId=secretref:bot-id"
+# "tenantId=secretref:bot-tenant-id" "BOT_TYPE=secretref:bot-type" "BOT_DOMAIN=${{BOT_DOMAIN}}"
+# "AAD_APP_CLIENT_ID=secretref:aad-app-client-id"
+# "AAD_APP_CLIENT_SECRET=secretref:aad-app-client-secret"
+# "AAD_APP_TENANT_ID=secretref:aad-app-tenant-id"
+# "AAD_APP_OAUTH_AUTHORITY_HOST=secretref:aad-app-oauth-authority-host"
 
 # Triggered when 'teamsapp publish' is executed
 publish:

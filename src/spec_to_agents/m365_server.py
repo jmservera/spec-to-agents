@@ -9,6 +9,7 @@ agent. It handles incoming messages via the Activity protocol and integrates wit
 Teams, M365 Copilot, and other Microsoft platforms.
 
 Implementation example: https://learn.microsoft.com/en-us/microsoft-365/agents-sdk/quickstart?pivots=python
+More info at: https://learn.microsoft.com/en-us/microsoft-agent-365/developer/testing?tabs=python
 
 Pattern
 -------
@@ -37,6 +38,8 @@ from os import environ
 
 from aiohttp.web import Application, AppRunner, Request, Response, TCPSite
 from dotenv import load_dotenv
+from microsoft_agents.activity import load_configuration_from_env
+from microsoft_agents.authentication.msal import MsalConnectionManager
 from microsoft_agents.hosting.aiohttp import (
     CloudAdapter,
     jwt_authorization_middleware,
@@ -277,16 +280,40 @@ async def _build_and_start_agent() -> None:
 
     This helper function creates the agent after MCP tools are initialized.
     """
-    # Create agent application with storage and adapter
+    # Load configuration from environment variables
+    # This reads MICROSOFT_APP_ID, MICROSOFT_APP_TYPE, MICROSOFT_APP_TENANT_ID, etc.
+    # CONNECTIONS__SERVICE_CONNECTION__SETTINGS__CLIENTID=client-id
+    # CONNECTIONS__SERVICE_CONNECTION__SETTINGS__TENANTID=tenant-id
+    # CONNECTIONS__SERVICE_CONNECTION__SETTINGS__AUTHTYPE=UserManagedIdentity
+    # see https://github.com/microsoft/Agents/blob/main/samples/python/quickstart/README.md
+    agents_sdk_config = load_configuration_from_env(environ)
+    
+    # Create storage
     storage = MemoryStorage()
     
-    # CloudAdapter() with no parameters runs in anonymous mode for local development
-    # Production deployments should configure with proper authentication
-    adapter = CloudAdapter()
+    # Create connection manager using MSAL authentication
+    # This handles token acquisition for Bot Framework service calls
+    connection_manager: MsalConnectionManager|None = None
+    
+    if(environ.get("CONNECTIONS__SERVICE_CONNECTION__SETTINGS__AUTH_TYPE","").lower() == "usermanagedidentity"):
+        # Use User Managed Identity authentication
+        connection_manager = MsalConnectionManager(**agents_sdk_config)
+    
+    # Create CloudAdapter with connection manager
+    adapter = CloudAdapter(connection_manager=connection_manager)
+    
+    # Log authentication status
+    bot_app_id = environ.get("BOT_ID")
+    if bot_app_id:
+        print(f"🔐 Authentication configured for production (Bot ID: {bot_app_id[:8]}...)")
+    else:
+        print("⚠️  Running in anonymous mode (local development only)")
 
+    # Create AgentApplication
     agent_app = AgentApplication[WorkflowTurnState](
         storage=storage,
         adapter=adapter,
+        **agents_sdk_config
     )
 
     # Register activity handlers
@@ -389,7 +416,11 @@ async def _build_and_start_agent() -> None:
 
     # Start HTTP server (async call)
     print("✅ Agent application ready!")
-    await start_server(agent_app, None)
+    
+    # Get auth configuration from connection manager (standard pattern)
+    auth_config = connection_manager.get_default_connection_configuration() if connection_manager else None
+    
+    await start_server(agent_app, auth_config)
 
 
 def cli() -> None:

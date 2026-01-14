@@ -3,12 +3,9 @@ param location string = resourceGroup().location
 param tags object = {}
 param appSettings array = []
 param serviceName string = 'app'
-param identityId string = ''
+param identityId string
 param containerAppsEnvironmentId string
 param containerRegistryName string
-
-@allowed(['SystemAssigned', 'UserAssigned', 'SystemAssigned,UserAssigned'])
-param identityType string = 'UserAssigned'
 
 
 resource containerRegistry 'Microsoft.ContainerRegistry/registries@2023-07-01' existing = {
@@ -25,13 +22,12 @@ module containerApp 'br/public:avm/res/app/container-app:0.11.0' = {
     tags: union(tags, { 'azd-service-name': serviceName })
     environmentResourceId: containerAppsEnvironmentId
     managedIdentities: {
-      systemAssigned: contains(identityType, 'SystemAssigned')
-      userAssignedResourceIds: contains(identityType, 'UserAssigned') ? [identityId] : []
+      userAssignedResourceIds: [identityId]
     }
     registries: [
       {
         server: containerRegistry.properties.loginServer
-        identity: contains(identityType, 'UserAssigned') ? identityId : ''
+        identity: identityId
       }
     ]
     containers: [
@@ -56,5 +52,4 @@ module containerApp 'br/public:avm/res/app/container-app:0.11.0' = {
 
 output SERVICE_APP_NAME string = containerApp.outputs.name
 output SERVICE_APP_URI string = containerApp.outputs.fqdn
-output SERVICE_APP_IDENTITY_PRINCIPAL_ID string = contains(identityType, 'SystemAssigned') ? containerApp.outputs.systemAssignedMIPrincipalId : ''
 output resourceId string = containerApp.outputs.resourceId
