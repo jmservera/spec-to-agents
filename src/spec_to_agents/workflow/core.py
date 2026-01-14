@@ -5,6 +5,7 @@
 from agent_framework import (
     AgentExecutor,
     BaseChatClient,
+    InMemoryCheckpointStorage,
     Workflow,
     WorkflowBuilder,
 )
@@ -18,6 +19,22 @@ from spec_to_agents.agents import (
     venue_specialist,
 )
 from spec_to_agents.workflow.executors import EventPlanningCoordinator
+
+# Global checkpoint storage - persists across all workflow instances
+# This is critical for M365 server where each HTTP request creates a new workflow
+_CHECKPOINT_STORAGE = InMemoryCheckpointStorage()
+
+
+def get_checkpoint_storage() -> InMemoryCheckpointStorage:
+    """
+    Get the global checkpoint storage instance.
+
+    Returns
+    -------
+    InMemoryCheckpointStorage
+        The global checkpoint storage shared by all workflow instances
+    """
+    return _CHECKPOINT_STORAGE
 
 
 @inject
@@ -97,7 +114,8 @@ def build_event_planning_workflow(
     catering_exec = AgentExecutor(agent=catering_agent, id="catering")
     logistics_exec = AgentExecutor(agent=logistics_agent, id="logistics")
 
-    # Build workflow with bidirectional star topology
+    # Build workflow with bidirectional star topology and checkpointing
+    # Use global checkpoint storage to persist state across HTTP requests
     workflow = (
         WorkflowBuilder(
             name="Event Planning Workflow",
@@ -119,6 +137,8 @@ def build_event_planning_workflow(
         .add_edge(catering_exec, coordinator)
         .add_edge(coordinator, logistics_exec)
         .add_edge(logistics_exec, coordinator)
+        # Enable checkpointing with global storage for M365 server persistence
+        .with_checkpointing(_CHECKPOINT_STORAGE)
         .build()
     )
 
