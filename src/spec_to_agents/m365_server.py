@@ -10,6 +10,7 @@ Teams, M365 Copilot, and other Microsoft platforms.
 
 Implementation example: https://learn.microsoft.com/en-us/microsoft-365/agents-sdk/quickstart?pivots=python
 More info at: https://learn.microsoft.com/en-us/microsoft-agent-365/developer/testing?tabs=python
+Activity protocol: https://learn.microsoft.com/en-us/microsoft-365/agents-sdk/activity-protocol
 
 Pattern
 -------
@@ -237,7 +238,19 @@ async def _execute_workflow(
             stream = workflow.run_stream(user_message)
 
         # Process streaming events
-        last_typing_time = 0.0
+        last_typing_time = time.time()
+        last_progress_message_time = time.time()
+        last_notified_agent = None
+        
+        # Agent display names for user-friendly messages
+        agent_names = {
+            "venue": "🏢 Venue Specialist",
+            "budget": "💰 Budget Analyst",
+            "catering": "🍽️ Catering Coordinator",
+            "logistics": "📅 Logistics Manager",
+            "coordinator": "🎯 Event Coordinator"
+        }
+        
         async for event in stream:
             # Send typing indicator at most once per second
             current_time = time.time()
@@ -249,15 +262,41 @@ async def _execute_workflow(
                     # Gracefully handle disconnections or network errors
                     print(f"⚠️  Could not send typing indicator: {e}")
                 last_typing_time = current_time
-            # Handle agent run updates (optional: could log or send typing indicators)
+            
+            # Send progress messages every 15 seconds to prevent timeout
+            # M365 Copilot expects responses within ~20-30 seconds
+            if current_time - last_progress_message_time >= 45.0:
+                try:
+                    await context.send_activity(
+                        "⏳ Still working on your event plan... This may take a moment as I coordinate with specialist agents."
+                    )
+                    print("📨 Sent progress update message")
+                    last_progress_message_time = current_time
+                except Exception as e:
+                    print(f"⚠️  Could not send progress message: {e}")
+            
+            # Handle agent run updates - notify user which agent is working
             if isinstance(event, AgentRunUpdateEvent):
-                # In console.py this displays tool calls/results
-                # In server mode, we skip detailed streaming for simplicity
-                # send typing indicator or log if desired
-                # await context.send_trace_activity("AgentRunUpdateEvent received",                                                  
-                #                                   value= json.dumps(event.data)
-                #                                   )
-                pass
+                # Extract agent name from event data
+                agent_data = event.data
+                agent_name = None
+                
+                # Try to get agent name from event data
+                if hasattr(agent_data, 'author_name'):
+                    agent_name = agent_data.author_name.lower()
+                elif isinstance(agent_data, dict) and 'name' in agent_data:
+                    agent_name = agent_data['name'].lower()
+                
+                # Notify user when a new agent starts working
+                if agent_name and agent_name != last_notified_agent:
+                    # Map agent name to friendly display name
+                    display_name = agent_names.get(agent_name, f"🤖 {agent_name.title()}")
+                    try:
+                        await context.send_activity(f"Consulting with {display_name}...")
+                        print(f"👤 Notified user about agent: {display_name}")
+                        last_notified_agent = agent_name
+                    except Exception as e:
+                        print(f"⚠️  Could not send agent notification: {e}")
 
             # Handle human-in-the-loop requests
             elif isinstance(event, RequestInfoEvent) and isinstance(
