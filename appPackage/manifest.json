@@ -1,7 +1,7 @@
 {
     "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.24/MicrosoftTeams.schema.json",
     "manifestVersion": "1.24",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "id": "${{TEAMS_APP_ID}}",
     "developer": {
         "name": "My App, Inc.",
@@ -14,8 +14,8 @@
         "outline": "outline.png"
     },
     "name": {
-        "short": "spec-to-agents${{APP_NAME_SUFFIX}}",
-        "full": "full name for spec-to-agents"
+        "short": "Event Organizer ${{APP_NAME_SUFFIX}}",
+        "full": "A custom agent to organize events ${{APP_NAME_SUFFIX}}"
     },
     "description": {
         "short": "short description for spec-to-agents",
@@ -50,6 +50,14 @@
                         {
                             "title": "How can you help me?",
                             "description": "How can you help me?"
+                        },
+                        {
+                            "title": "Plan a corporate internal party",
+                            "description": "Plan a corporate holiday party for 50 people on December 6th, 2025 in Seattle with a budget of $5,000. Include venue options, catering for dietary restrictions, and check the weather forecast."
+                        },
+                        {
+                            "title": "Plan a birthday party",
+                            "description": "Plan a birthday party for 20 people on July 15th, in Mallorca, Spain, with a budget of $2,000. Include venue options, vegetarian catering for dietary restrictions, and suggest fun activities."
                         }
                     ]
                 }

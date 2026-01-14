@@ -319,34 +319,14 @@ module app './app/container-app.bicep' = {
       {
         name: 'CONTAINER_ENV'
         value: 'true'
-      }
-      {
-        name: 'BOT_ID'
-        value: botUserAssignedIdentity.outputs.clientId
-      }
-      {
-        name: 'CONNECTIONS__SERVICE_CONNECTION__SETTINGS__CLIENTID'
-        value: botUserAssignedIdentity.outputs.clientId
-      }
-      {
-        name: 'CONNECTIONS__SERVICE_CONNECTION__SETTINGS__TENANTID'
-        value: subscription().tenantId
-      }
-      {
-        name: 'CONNECTIONS__SERVICE_CONNECTION__SETTINGS__AUTHTYPE'
-        value: 'UserManagedIdentity'
-      }
+      }      
       {
         name: 'AZURE_CLIENT_ID'
-        value: botUserAssignedIdentity.outputs.clientId
+        value: appUserAssignedIdentity.outputs.clientId
       }
       {
         name: 'AZURE_TENANT_ID'
         value: subscription().tenantId
-      }
-      {
-        name: 'CONNECTIONS__SERVICE_CONNECTION__SETTINGS__FEDERATEDCLIENTID'
-        value: botUserAssignedIdentity.outputs.resourceId
       }
     ]
   }
