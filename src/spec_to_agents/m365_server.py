@@ -153,6 +153,14 @@ async def start_server(
     finally:
         await runner.cleanup()
 
+from microsoft_agents.activity import (
+    Activity,
+    ActivityTypes)
+async def send_typing(context: TurnContext) -> None:
+    typingActivity = Activity(type= ActivityTypes.typing)
+    await context.send_activity(typingActivity)  # Typing indicator
+
+counter = 0
 
 async def _execute_workflow(
     context: TurnContext, state: WorkflowTurnState, user_message: str
@@ -173,6 +181,7 @@ async def _execute_workflow(
     user_message : str
         The user's message or response to process
     """
+    global counter
     try:
         # Build workflow with MCP tools automatically injected from DI container
         workflow = build_event_planning_workflow()
@@ -195,10 +204,18 @@ async def _execute_workflow(
 
         # Process streaming events
         async for event in stream:
+            if counter % 8 == 0:
+                await send_typing(context)
+                print("Typing indicator sent")
+            counter += 1
             # Handle agent run updates (optional: could log or send typing indicators)
             if isinstance(event, AgentRunUpdateEvent):
                 # In console.py this displays tool calls/results
                 # In server mode, we skip detailed streaming for simplicity
+                # send typing indicator or log if desired
+                # await context.send_trace_activity("AgentRunUpdateEvent received",                                                  
+                #                                   value= json.dumps(event.data)
+                #                                   )
                 pass
 
             # Handle human-in-the-loop requests
