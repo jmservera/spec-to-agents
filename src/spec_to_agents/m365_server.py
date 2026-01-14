@@ -170,7 +170,7 @@ async def start_server(
 from microsoft_agents.activity import (
     Activity,
     ActivityTypes,
-    Attachment,
+    Attachment,    
     AttachmentData,
 )
 
@@ -426,6 +426,8 @@ async def _execute_workflow(
                         next_agent=next_agent,
                         user_input_needed=user_input_needed,
                     )
+                    from microsoft_agents.hosting.aiohttp.app.streaming.citation import Citation
+                    context.streaming_response.set_citations([Citation(summary,feedback_request.requesting_agent)])
                     if card:
                         context.streaming_response.set_attachments([card])
                 # Send prompt to user
@@ -434,13 +436,14 @@ async def _execute_workflow(
                     f"{feedback_request.prompt}"
                 )
                 context.streaming_response.queue_text_chunk(prompt_message)
+                print("✋ Sent human feedback request to user")
                 await context.streaming_response.end_stream()
-
             # Handle final workflow output
             elif isinstance(event, WorkflowOutputEvent):
                 state.workflow_output = str(event.data)
                 state.is_workflow_complete = True
 
+                await context.streaming_response.end_stream()
                 # Send final event plan to user
                 await context.send_activity(
                     f"**✨ Event Plan Complete:**\n\n{state.workflow_output}"
@@ -451,12 +454,14 @@ async def _execute_workflow(
                 pass  # Status events don't contain checkpoint info
 
     except Exception as e:
+        await context.streaming_response.end_stream()
+
         await context.send_activity(
             f"❌ **Error executing workflow:** {str(e)}\n\n"
             "Please try again or contact support if the issue persists."
         )
         traceback.print_exc()
-        raise
+        raise        
 
 
 async def main() -> None:
