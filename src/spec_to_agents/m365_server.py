@@ -65,7 +65,7 @@ from agent_framework import (
 )
 from spec_to_agents.container import AppContainer
 from spec_to_agents.models.messages import HumanFeedbackRequest
-from spec_to_agents.workflow.core import build_event_planning_workflow, get_checkpoint_storage
+from spec_to_agents.workflow.core import build_event_planning_workflow
 
 
 
@@ -86,15 +86,11 @@ class WorkflowTurnState(BaseTurnState):
         Final output from completed workflow
     is_workflow_complete : bool
         Whether the workflow has finished execution
-    checkpoint_id : str | None
-        The workflow checkpoint ID for resuming after HITL pauses.
-        Workflows maintain their state (including agent service threads) via checkpoints.
     """
 
     pending_requests: dict[str, HumanFeedbackRequest] = field(default_factory=dict)
     workflow_output: str | None = None
     is_workflow_complete: bool = False
-    checkpoint_id: str | None = None
 
 
 # Global variables for DI container and MCP tools
@@ -175,10 +171,17 @@ from microsoft_agents.activity import (
 )
 
 
-async def send_typing(context: TurnContext) -> None:
+async def send_typing(context: TurnContext, message: str|None = None) -> None:
     """Send a typing indicator to the user."""
-    typingActivity = Activity(type=ActivityTypes.typing)
-    await context.send_activity(typingActivity)
+    try:
+        print("💬 Sending typing indicator...")
+        if message:
+            typingActivity = Activity(type=ActivityTypes.typing, text=message)
+        else:
+            typingActivity = Activity(type=ActivityTypes.typing)
+        await context.send_activity(typingActivity)
+    except Exception as e:
+        print(f"⚠️  Could not send typing indicator: {e}")
 
 
 def generate_context_card(
@@ -301,25 +304,14 @@ async def _execute_workflow(
         # Check if responding to pending human-in-the-loop request
         if state.pending_requests:
             # User is responding to a previous RequestInfoEvent
-            # Restore from checkpoint and send response
             pending_responses = {
                 request_id: user_message
                 for request_id in state.pending_requests.keys()
             }
             state.pending_requests.clear()
             
-            if state.checkpoint_id:
-                print(f"🔄 Resuming from HITL checkpoint: {state.checkpoint_id}")
-                # First restore checkpoint to emit pending requests
-                async for event in workflow.run_stream(checkpoint_id=state.checkpoint_id):
-                    if isinstance(event, RequestInfoEvent):
-                        pass  # Skip - we're about to respond
-                # Then send responses
-                stream = workflow.send_responses_streaming(pending_responses)
-                state.checkpoint_id = None  # Clear checkpoint after HITL resume
-            else:
-                print("⚠️  Warning: Pending responses but no checkpoint_id!")
-                stream = workflow.send_responses_streaming(pending_responses)
+            print("🔄 Resuming from HITL")
+            stream = workflow.send_responses_streaming(pending_responses)
         else:
             # Normal conversation flow: agent service threads handle history
             stream = workflow.run_stream(user_message)
@@ -341,16 +333,11 @@ async def _execute_workflow(
         context.streaming_response.queue_informative_update("Starting workflow streaming...")
         
         async for event in stream:
-            # Send typing indicator at most once per second
+            # Send typing indicator at most once every 5 second
             current_time = time.time()
-            if current_time - last_typing_time >= 1.0:
-                try:
-                    await send_typing(context)
-                    print("💬 Sending typing indicator...")
-                except Exception as e:
-                    # Gracefully handle disconnections or network errors
-                    print(f"⚠️  Could not send typing indicator: {e}")
+            if current_time - last_typing_time >= 5.0:
                 last_typing_time = current_time
+                await send_typing(context)
             
             # Send progress messages every 15 seconds to prevent timeout
             # M365 Copilot expects responses within ~20-30 seconds
@@ -388,17 +375,9 @@ async def _execute_workflow(
 
             # Handle human-in-the-loop requests
             elif isinstance(event, RequestInfoEvent) and isinstance(event.data, HumanFeedbackRequest):
-                # Workflow is requesting human input - capture checkpoint for HITL resume
+                # Workflow is requesting human input
                 feedback_request: HumanFeedbackRequest = event.data
                 state.pending_requests[event.request_id] = feedback_request
-
-                # Capture checkpoint for HITL restoration
-                checkpoint_storage = get_checkpoint_storage()
-                checkpoints = await checkpoint_storage.list_checkpoints()
-                if checkpoints:
-                    checkpoints.sort(key=lambda cp: cp.timestamp, reverse=True)
-                    state.checkpoint_id = checkpoints[0].checkpoint_id
-                    print(f"💾 Captured HITL checkpoint: {state.checkpoint_id}")
 
                 # Try to extract context from last conversation message
                 summary = None
@@ -572,8 +551,6 @@ async def _build_and_start_agent() -> None:
             state.workflow_output = None  # type: ignore
         if not hasattr(state, 'is_workflow_complete'):
             state.is_workflow_complete = False  # type: ignore
-        if not hasattr(state, 'checkpoint_id'):
-            state.checkpoint_id = None  # type: ignore
         # Installation events don't require a response
         pass
 
@@ -589,8 +566,6 @@ async def _build_and_start_agent() -> None:
             state.workflow_output = None  # type: ignore
         if not hasattr(state, 'is_workflow_complete'):
             state.is_workflow_complete = False  # type: ignore
-        if not hasattr(state, 'checkpoint_id'):
-            state.checkpoint_id = None  # type: ignore
             
         if context.activity.members_added:
             for member in context.activity.members_added:
@@ -638,8 +613,6 @@ async def _build_and_start_agent() -> None:
             state.workflow_output = None  # type: ignore
         if not hasattr(state, 'is_workflow_complete'):
             state.is_workflow_complete = False  # type: ignore
-        if not hasattr(state, 'checkpoint_id'):
-            state.checkpoint_id = None  # type: ignore
         
         user_message = context.activity.text or ""
 
