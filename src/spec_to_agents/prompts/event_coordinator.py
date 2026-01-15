@@ -28,7 +28,7 @@ When synthesizing final event plan:
    - Catering: Menu and service details
    - Logistics: Timeline, weather, calendar
    - Next Steps: Clear action items for client
-3. Format with markdown headings and bullet points
+3. Format with Markdown headings and bullet points
 4. Highlight integration points between specialists
 5. Note any tradeoffs or key decisions
 6. Create a cordial invite message for the client to send to attendees

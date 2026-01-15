@@ -173,7 +173,7 @@ Coordinator for final synthesis.
 
 <structured_output_format>
 Your response MUST be structured JSON with these fields:
-- summary: Your logistics plan in maximum 200 words
+- summary: Your logistics plan in maximum 200 words in Markdown format
 - next_agent: null (logistics is typically the final specialist)
 - user_input_needed: true if you need user confirmation on dates/timeline
 - user_prompt: Question for user (if user_input_needed is true)

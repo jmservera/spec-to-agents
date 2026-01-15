@@ -222,12 +222,19 @@ def generate_context_card(
         # Show next agent section only if next_agent is not None
         show_next_agent = next_agent is not None
 
-        # Replace template variables (simple string replacement)
+        # Sanitize inputs by properly escaping them for JSON
+        # Use json.dumps to escape special characters (newlines, tabs, quotes, etc.)
+        def sanitize_for_json(text: str) -> str:
+            """Escape text for safe insertion into JSON string."""
+            # json.dumps adds quotes, so we strip them and unescape double escapes
+            return json.dumps(text)[1:-1]
+
+        # Replace template variables with sanitized values
         card_json = json.dumps(card_template)
-        card_json = card_json.replace("${agent_name}", formatted_agent_name)
-        card_json = card_json.replace("${summary}", summary)
-        card_json = card_json.replace("${next_agent}", formatted_next_agent)
-        card_json = card_json.replace("${status}", status)
+        card_json = card_json.replace("${agent_name}", sanitize_for_json(formatted_agent_name))
+        card_json = card_json.replace("${summary}", sanitize_for_json(summary))
+        card_json = card_json.replace("${next_agent}", sanitize_for_json(formatted_next_agent))
+        card_json = card_json.replace("${status}", sanitize_for_json(status))
         card_json = card_json.replace("${show_next_agent}", str(show_next_agent).lower())
         card_data = json.loads(card_json)
 
@@ -371,7 +378,7 @@ async def _execute_workflow(
                 # Notify user when a new agent starts working
                 if agent_name and agent_name != last_notified_agent:
                     # Map agent name to friendly display name
-                    display_name = agent_names.get(agent_name, f"🤖 {agent_name.title()}")
+                    display_name = agent_names.get(agent_name, f"🤖 {agent_name.replace('_', ' ').title()}")
                     try:
                         context.streaming_response.queue_informative_update(f"Consulting with {display_name}...")
                         print(f"👤 Notified user about agent: {display_name}")
@@ -445,8 +452,19 @@ async def _execute_workflow(
 
                 await context.streaming_response.end_stream()
                 # Send final event plan to user
+                
+                # Try to extract summary from JSON, otherwise use raw output
+                output_text = state.workflow_output
+                try:
+                    output_data = json.loads(state.workflow_output)
+                    if isinstance(output_data, dict) and "summary" in output_data:
+                        output_text = output_data["summary"]
+                except (json.JSONDecodeError, TypeError):
+                    # Not JSON or no summary field, use raw output
+                    pass
+
                 await context.send_activity(
-                    f"**✨ Event Plan Complete:**\n\n{state.workflow_output}"
+                    f"**✨ Event Plan Complete:**\n\n{output_text}"
                 )
 
             # Handle workflow status events (informational)

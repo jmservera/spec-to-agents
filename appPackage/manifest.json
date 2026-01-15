@@ -53,11 +53,19 @@
                         },
                         {
                             "title": "Plan a corporate internal party",
-                            "description": "Plan a corporate holiday party for 50 people on December 6th, 2025 in Seattle with a budget of $5,000. Include venue options, catering for dietary restrictions, and check the weather forecast."
+                            "description": "Plan a corporate holiday party for 50 people on December 6th in Seattle with a budget of $5,000. Include venue options, catering for dietary restrictions, and check the weather forecast."
                         },
                         {
                             "title": "Plan a birthday party",
-                            "description": "Plan a birthday party for 20 people on July 15th, in Mallorca, Spain, with a budget of $2,000. Include venue options, vegetarian catering for dietary restrictions, and suggest fun activities."
+                            "description": "Plan a birthday party for 20 people on July 15th, in Madrid, Spain, with a budget of $2,000. Include venue options, vegetarian catering for dietary restrictions, and suggest fun activities."
+                        },
+                        {
+                            "title": "Plan a wedding reception",
+                            "description": "Plan a wedding reception for 100 people on June 10th, in Tuscany, Italy, with a budget of $15,000. Include venue options, catering for dietary restrictions, and suggest a timeline for the event."
+                        },
+                        {
+                            "title": "Suggest the best date for a whale sightseeing trip for a group of 10 people",
+                            "description": "Suggest the best date for a whale sightseeing trip for a group of 10 people in the Mediterranean Sea, considering weather conditions and local regulations."
                         }
                     ]
                 }

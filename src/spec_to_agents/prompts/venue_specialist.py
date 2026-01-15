@@ -141,7 +141,7 @@ Once you provide your recommendations, indicate you're ready for the next step i
 
 <structured_output_format>
 Your response MUST be structured JSON with these fields:
-- summary: Your venue recommendations in maximum 200 words
+- summary: Your venue recommendations in maximum 200 words in Markdown format
 - next_agent: Which specialist should work next ("budget", "catering", "logistics") or null
   if workflow complete
 - user_input_needed: true if you need user clarification/selection, false otherwise
