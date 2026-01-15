@@ -40,15 +40,21 @@ from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from os import environ
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from aiohttp.web import Application, AppRunner, Request, Response, TCPSite
 from dotenv import load_dotenv
-from microsoft_agents.activity import Activity, ActivityTypes, Attachment, load_configuration_from_env
+from microsoft_agents.activity import (
+    Activity,
+    ActivityTypes,
+    Attachment,
+    load_configuration_from_env,  # pyright: ignore[reportUnknownVariableType]
+)
 from microsoft_agents.authentication.msal import MsalConnectionManager
 from microsoft_agents.hosting.aiohttp import (
     CloudAdapter,
-    jwt_authorization_middleware,
-    start_agent_process,
+    jwt_authorization_middleware,  # pyright: ignore[reportUnknownVariableType]
+    start_agent_process,  # pyright: ignore[reportUnknownVariableType]
 )
 from microsoft_agents.hosting.core import (
     AgentApplication,
@@ -57,6 +63,9 @@ from microsoft_agents.hosting.core import (
     TurnContext,
     TurnState as BaseTurnState,
 )
+
+if TYPE_CHECKING:
+    from agent_framework import Workflow
 
 from agent_framework import (
     AgentRunUpdateEvent,
@@ -101,7 +110,9 @@ class WorkflowTurnState(BaseTurnState):
         Whether the workflow has finished execution
     """
 
-    pending_requests: dict[str, HumanFeedbackRequest] = field(default_factory=dict)
+    pending_requests: dict[str, HumanFeedbackRequest] = field(
+        default_factory=lambda: {}  # pyright: ignore[reportUnknownLambdaType]
+    )
     workflow_output: str | None = None
     is_workflow_complete: bool = False
 
@@ -113,7 +124,7 @@ _mcp_tools_initialized: bool = False
 
 # Workflow instance cache to preserve agent service threads across HTTP requests
 # Key: conversation_id, Value: workflow instance with agents
-_workflow_cache: dict[str, object] = {}
+_workflow_cache: dict[str, "Workflow"] = {}
 
 
 async def start_server(
@@ -139,10 +150,11 @@ async def start_server(
         """Handle incoming agent messages."""
         agent: AgentApplication[WorkflowTurnState] = req.app["agent_app"]
         adapter: CloudAdapter = req.app["adapter"]
-        return await start_agent_process(req, agent, adapter)
+        result = await start_agent_process(req, agent, adapter)  # pyright: ignore[reportUnknownVariableType]
+        return result or Response(status=200)
 
     # Create aiohttp application with JWT middleware
-    app = Application(middlewares=[jwt_authorization_middleware])
+    app = Application(middlewares=[jwt_authorization_middleware])  # pyright: ignore[reportUnknownArgumentType]
 
     # Register routes
     app.router.add_post("/api/messages", entry_point)
@@ -179,14 +191,22 @@ async def start_server(
 
 
 
-async def send_typing(context: TurnContext, message: str|None = None) -> None:
+async def send_typing(context: TurnContext, message: str | None = None) -> None:
     """Send a typing indicator to the user."""
     try:
         logger.debug("💬 Sending typing indicator...")
+        # Activity constructor requires 'from_property' but it's auto-set by the adapter
         if message:
-            typingActivity = Activity(type=ActivityTypes.typing, text=message)
+            typingActivity = Activity(  # pyright: ignore[reportCallIssue]
+                type=ActivityTypes.typing,
+                text=message,
+                # from_property=context.activity.recipient,  # pyright: ignore[reportCallIssue]
+            )
         else:
-            typingActivity = Activity(type=ActivityTypes.typing)
+            typingActivity = Activity(  # pyright: ignore[reportCallIssue]
+                type=ActivityTypes.typing,
+                # from_property=context.activity.recipient,  # pyright: ignore[reportCallIssue]
+            )
         await context.send_activity(typingActivity)
     except Exception as e:
         logger.warning(f"⚠️  Could not send typing indicator: {e}")
@@ -292,12 +312,50 @@ async def _execute_workflow(
     """
 
     logger.info("🚀 Executing event planning workflow...")
-    logger.debug(f"Streaming enabled: {context.streaming_response._is_streaming_channel}")
-    context.streaming_response.queue_informative_update("Starting workflow execution...")
+    
+    last_typing_time = time.time()
+    last_progress_message_time = time.time()
+    last_notified_agent = None
+    
+    # Access streaming response - it may be None in non-streaming contexts
+    streaming = context.streaming_response
+    stream_timed_out = False  # Track if streaming timed out
+    
+    def is_stream_alive() -> bool:
+        """Check if the streaming response is still usable."""
+        if not streaming:
+            return False
+        if stream_timed_out:
+            return False
+        try:
+            return not streaming._ended  # pyright: ignore[reportPrivateUsage]
+        except Exception:
+            return False
+        
+    def queue_info_update(info:str):
+        global stream_timed_out
+        global last_progress_message_time
+
+        try:
+            if is_stream_alive():
+                streaming.queue_informative_update(info)  # pyright: ignore[reportOptionalMemberAccess]                       
+                logger.debug("📨 Sent progress update message")
+            last_progress_message_time = time.time()
+        except Exception as e:
+            if "exceeded streaming time" in str(e).lower() or "forbidden" in str(e).lower():
+                logger.warning("⚠️ Stream timed out during progress update")
+                stream_timed_out = True
+            else:
+                logger.warning(f"⚠️  Could not send progress message: {e}")       
+
+    
+    if streaming:
+        logger.debug(f"Streaming enabled: {streaming._is_streaming_channel}")  # pyright: ignore[reportPrivateUsage]
+        queue_info_update("Starting workflow execution...")
 
     # Track content for recovery in case of stream failure
-    streamed_content = []
-    streamed_attachments = []
+    streamed_content: list[str] = []
+    streamed_attachments: list[Attachment] = []
 
     try:
         # Get or create workflow instance for this conversation
@@ -328,10 +386,7 @@ async def _execute_workflow(
             # Normal conversation flow: agent service threads handle history
             stream = workflow.run_stream(user_message)
 
-        # Process streaming events
-        last_typing_time = time.time()
-        last_progress_message_time = time.time()
-        last_notified_agent = None
+
         
         # Agent display names for user-friendly messages
         agent_names = {
@@ -342,47 +397,48 @@ async def _execute_workflow(
             "coordinator": "🎯 Event Coordinator"
         }
 
-        context.streaming_response.queue_informative_update("Starting workflow streaming...")
+        queue_info_update("Starting workflow streaming...")  # pyright: ignore[reportOptionalMemberAccess]
         
         try:
-            async for event in stream:
+            async for event in stream:  # pyright: ignore[reportUnknownVariableType]
                 # Check if stream is still alive before sending updates
-                if context.streaming_response._ended:
-                    logger.warning("⚠️ Stream ended, stopping workflow event processing")
-                    break
+                if not is_stream_alive():
+                    logger.warning("⚠️ Stream ended/timed out, continuing workflow without streaming...")
+                    # Don't break - continue processing events, just skip streaming updates
                     
-                # Send typing indicator at most once every 3 seconds
+                # Send typing indicator at most once every 1 second
                 current_time = time.time()
-                if current_time - last_typing_time >= 3.0:
+                if current_time - last_typing_time >= 1.0:
                     last_typing_time = current_time
                     try:
                         await send_typing(context)
                     except Exception as e:
-                        logger.warning(f"⚠️ Failed to send typing indicator: {e}")
-                        # Connection might be dead, stop processing
-                        break
+                        # Check if this is a stream timeout error
+                        if "exceeded streaming time" in str(e).lower() or "forbidden" in str(e).lower():
+                            logger.warning("⚠️ Stream timed out, switching to non-streaming mode")
+                            stream_timed_out = True
+                        else:
+                            logger.warning(f"⚠️ Failed to send typing indicator: {e}")
+                        # Continue processing - don't break
             
                 # Send progress messages every 25 seconds to prevent timeout
                 # M365 Copilot expects responses within ~20-30 seconds
-                if current_time - last_progress_message_time >= 25.0:
-                    try:
-                        context.streaming_response.queue_informative_update("⏳ Still working on your event plan... This may take a moment as I coordinate with specialist agents.")
-                        logger.debug("📨 Sent progress update message")
-                        last_progress_message_time = current_time
-                    except Exception as e:
-                        logger.warning(f"⚠️  Could not send progress message: {e}")
+                if current_time - last_progress_message_time >= 20.0:
+                    queue_info_update("⏳ Still working on your event plan... This may take a moment as I coordinate with specialist agents.")
             
                 # Handle agent run updates - notify user which agent is working
                 if isinstance(event, AgentRunUpdateEvent):
                     # Extract agent name from event data
-                    agent_data = event.data
-                    agent_name = None
+                    agent_data = event.data  # pyright: ignore[reportUnknownMemberType]
+                    agent_name: str | None = None
                     
                     # Try to get agent name from event data
-                    if hasattr(agent_data, 'author_name'):
-                        agent_name = agent_data.author_name.lower()
+                    if agent_data is not None and hasattr(agent_data, 'author_name'):
+                        author = getattr(agent_data, 'author_name', None)
+                        if author:
+                            agent_name = str(author).lower()
                     elif isinstance(agent_data, dict) and 'name' in agent_data:
-                        agent_name = agent_data['name'].lower()
+                        agent_name = str(agent_data['name']).lower()  # pyright: ignore[reportUnknownArgumentType]
                     
                     # Notify user when a new agent starts working
                     if agent_name and agent_name != last_notified_agent:
@@ -390,11 +446,14 @@ async def _execute_workflow(
                         display_name = agent_names.get(agent_name, f"🤖 {agent_name.replace('_', ' ').title()}")
                         try:
                             message = f"Consulting with {display_name}..."
-                            context.streaming_response.queue_informative_update(message)
+                            queue_info_update(message)
                             logger.debug(f"👤 Notified user about agent: {display_name}")
                             last_notified_agent = agent_name
                         except Exception as e:
-                            logger.warning(f"⚠️  Could not send agent notification: {e}")
+                            if "exceeded streaming time" in str(e).lower() or "forbidden" in str(e).lower():
+                                stream_timed_out = True
+                            else:
+                                logger.warning(f"⚠️  Could not send agent notification: {e}")
 
                 # Handle human-in-the-loop requests
                 elif isinstance(event, RequestInfoEvent) and isinstance(event.data, HumanFeedbackRequest):
@@ -429,7 +488,7 @@ async def _execute_workflow(
 
                     # Send adaptive card with agent context if we have summary
                     if summary:
-                        card=generate_context_card(
+                        card = generate_context_card(
                             agent_name=feedback_request.requesting_agent,
                             summary=summary,
                             next_agent=next_agent,
@@ -437,23 +496,46 @@ async def _execute_workflow(
                         )
                         from microsoft_agents.hosting.aiohttp.app.streaming.citation import Citation
                         try:
-                            context.streaming_response.set_citations([Citation(summary,feedback_request.requesting_agent)])
-                            if card:
-                                context.streaming_response.set_attachments([card])
+                            if is_stream_alive():
+                                streaming.set_citations([Citation(summary, feedback_request.requesting_agent)])  # pyright: ignore[reportOptionalMemberAccess]
+                                if card:
+                                    streaming.set_attachments([card])  # pyright: ignore[reportOptionalMemberAccess]
                         except Exception as e:
-                            logger.warning(f"⚠️  Could not set citations/attachments: {e}")
+                            if "exceeded streaming time" in str(e).lower() or "forbidden" in str(e).lower():
+                                stream_timed_out = True
+                            else:
+                                logger.warning(f"⚠️  Could not set citations/attachments: {e}")
+                    
                     # Send prompt to user
                     prompt_message = (
                         f"**{feedback_request.requesting_agent.replace('_', ' ').title()} needs your input:**\n\n"
                         f"{feedback_request.prompt}"
                     )
+                    
+                    # Try streaming first, fall back to regular activity if stream is dead
                     try:
-                        context.streaming_response.queue_text_chunk(prompt_message)
-                        logger.info("✋ Sent human feedback request to user")
-                        await context.streaming_response.end_stream()
+                        if is_stream_alive():
+                            streaming.queue_text_chunk(prompt_message)  # pyright: ignore[reportOptionalMemberAccess]
+                            logger.info("✋ Sent human feedback request to user (streaming)")
+                            await streaming.end_stream()  # pyright: ignore[reportOptionalMemberAccess]
+                        else:
+                            # Stream is dead, send as regular activity
+                            logger.info("✋ Sending human feedback request via regular activity (stream timed out)")
+                            await context.send_activity(prompt_message)
                     except Exception as e:
-                        logger.error(f"❌ Failed to send human feedback request: {e}")
-                        break
+                        # If streaming failed, try regular activity as fallback
+                        if "exceeded streaming time" in str(e).lower() or "forbidden" in str(e).lower():
+                            stream_timed_out = True
+                            logger.warning("⚠️ Stream timed out, falling back to regular activity")
+                            try:
+                                await context.send_activity(prompt_message)
+                                logger.info("✋ Sent human feedback request via fallback activity")
+                            except Exception as fallback_error:
+                                logger.error(f"❌ Failed to send human feedback request via fallback: {fallback_error}")
+                                break
+                        else:
+                            logger.error(f"❌ Failed to send human feedback request: {e}")
+                            break
                         
                 # Handle final workflow output
                 elif isinstance(event, WorkflowOutputEvent):
@@ -461,18 +543,22 @@ async def _execute_workflow(
                     state.is_workflow_complete = True
 
                     try:
-                        await context.streaming_response.end_stream()
+                        if is_stream_alive():
+                            await streaming.end_stream()  # pyright: ignore[reportOptionalMemberAccess]
                     except Exception as e:
-                        logger.warning(f"⚠️ Failed to end stream for workflow output: {e}")
+                        if "exceeded streaming time" in str(e).lower() or "forbidden" in str(e).lower():
+                            stream_timed_out = True
+                        else:
+                            logger.warning(f"⚠️ Failed to end stream for workflow output: {e}")
                         
                     # Send final event plan to user
                     
                     # Try to extract summary from JSON, otherwise use raw output
-                    output_text = state.workflow_output
+                    output_text: str = state.workflow_output
                     try:
                         output_data = json.loads(state.workflow_output)
                         if isinstance(output_data, dict) and "summary" in output_data:
-                            output_text = output_data["summary"]
+                            output_text = str(output_data["summary"])  # pyright: ignore[reportUnknownArgumentType]
                     except (json.JSONDecodeError, TypeError):
                         # Not JSON or no summary field, use raw output
                         pass
@@ -504,15 +590,21 @@ async def _execute_workflow(
         stream_ended_early = False
         
         try:
-            if not context.streaming_response._ended:
-                await context.streaming_response.end_stream()
-            else:
+            if is_stream_alive():
+                await streaming.end_stream()  # pyright: ignore[reportOptionalMemberAccess]
+            elif streaming:
                 stream_ended_early = True
                 logger.warning("⚠️ Stream already ended (likely due to timeout)")
         except RuntimeError:
             # Stream already ended (likely due to timeout)
             stream_ended_early = True
             logger.warning("⚠️ Stream already ended, skipping end_stream() call")
+        except Exception as end_error:
+            if "exceeded streaming time" in str(end_error).lower() or "forbidden" in str(end_error).lower():
+                stream_ended_early = True
+                logger.warning("⚠️ Stream timed out during error handling")
+            else:
+                logger.warning(f"⚠️ Failed to end stream: {end_error}")
 
         # Build error message
         error_message = f"❌ **Workflow execution interrupted:** {str(e)}\n\n"
@@ -520,7 +612,7 @@ async def _execute_workflow(
         # If stream failed and we have tracked content, include it
         if stream_ended_early and streamed_content:
             error_message += "**Partial results before interruption:**\n\n"
-            error_message += "\n\n".join(streamed_content)
+            error_message += "\n\n".join(str(c) for c in streamed_content)
             error_message += "\n\n---\n\n"
             logger.info(f"✅ Recovered {len(streamed_content)} content chunks from tracking")
         
@@ -529,10 +621,11 @@ async def _execute_workflow(
         # Send as regular activity with any tracked attachments
         if stream_ended_early and streamed_attachments:
             # Create Activity object to include attachments
-            activity = Activity(
+            activity = Activity(  # pyright: ignore[reportCallIssue]
                 type="message",
                 text=error_message,
                 attachments=streamed_attachments,
+                # from_property=context.activity.recipient,  # pyright: ignore[reportCallIssue]
             )
             logger.info(f"✅ Recovered {len(streamed_attachments)} attachments from tracking")
             await context.send_activity(activity)
@@ -541,8 +634,7 @@ async def _execute_workflow(
             await context.send_activity(error_message)
             
         logger.error(f"Error executing workflow: {e}", exc_info=True)
-        raise        
-
+        raise 
 
 async def main() -> None:
     """
@@ -590,7 +682,10 @@ async def _build_and_start_agent() -> None:
     # CONNECTIONS__SERVICE_CONNECTION__SETTINGS__TENANTID=tenant-id
     # CONNECTIONS__SERVICE_CONNECTION__SETTINGS__AUTHTYPE=UserManagedIdentity
     # see https://github.com/microsoft/Agents/blob/main/samples/python/quickstart/README.md
-    agents_sdk_config = load_configuration_from_env(environ)
+    # NOTE: load_configuration_from_env returns dict[Unknown, Unknown] due to incomplete type stubs
+    env_dict: dict[str, str] = dict(environ)
+    raw_config = load_configuration_from_env(env_dict)  # pyright: ignore[reportUnknownVariableType]
+    agents_sdk_config: dict[str, Any] = {str(k): v for k, v in raw_config.items()}  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType, reportUnknownArgumentType]
     
     # Create storage
     storage = MemoryStorage()
@@ -601,10 +696,10 @@ async def _build_and_start_agent() -> None:
     
     if(environ.get("CONNECTIONS__SERVICE_CONNECTION__SETTINGS__AUTH_TYPE","").lower() == "usermanagedidentity"):
         # Use User Managed Identity authentication
-        connection_manager = MsalConnectionManager(**agents_sdk_config)
+        connection_manager = MsalConnectionManager(**agents_sdk_config)  # pyright: ignore[reportUnknownArgumentType]
     
     # Create CloudAdapter with connection manager
-    adapter = CloudAdapter(connection_manager=connection_manager)
+    adapter = CloudAdapter(connection_manager=connection_manager)  # pyright: ignore[reportArgumentType]
     
     # Log authentication status
     bot_app_id = environ.get("BOT_ID")
@@ -617,13 +712,13 @@ async def _build_and_start_agent() -> None:
     agent_app = AgentApplication[WorkflowTurnState](
         storage=storage,
         adapter=adapter,
-        **agents_sdk_config
+        **agents_sdk_config  # pyright: ignore[reportUnknownArgumentType]
     )
 
     # Register activity handlers
 
-    @agent_app.activity("installationUpdate")
-    async def on_installation_update(
+    @agent_app.activity("installationUpdate")  # pyright: ignore[reportUnknownMemberType]
+    async def _on_installation_update(  # pyright: ignore[reportUnusedFunction]
         context: TurnContext, state: WorkflowTurnState
     ) -> None:
         """Handle installation updates (e.g., bot installed)."""
@@ -637,8 +732,8 @@ async def _build_and_start_agent() -> None:
         # Installation events don't require a response
         pass
 
-    @agent_app.activity("conversationUpdate")
-    async def on_conversation_update(
+    @agent_app.activity("conversationUpdate")  # pyright: ignore[reportUnknownMemberType]
+    async def _on_conversation_update(  # pyright: ignore[reportUnusedFunction]
         context: TurnContext, state: WorkflowTurnState
     ) -> None:
         """Handle conversation updates (e.g., member added)."""
@@ -663,8 +758,10 @@ async def _build_and_start_agent() -> None:
                         "Tell me about your event to get started!"
                     )
 
-    @agent_app.message("/help")
-    async def on_help(context: TurnContext, state: WorkflowTurnState) -> None:
+    @agent_app.message("/help")  # pyright: ignore[reportUnknownMemberType]
+    async def _on_help(  # pyright: ignore[reportUnusedFunction]
+        context: TurnContext, state: WorkflowTurnState
+    ) -> None:
         """Handle help command."""
         await context.send_activity(
             "**Event Planning Agent Help**\n\n"
@@ -681,8 +778,10 @@ async def _build_and_start_agent() -> None:
             "Just describe your event and I'll coordinate the specialists!"
         )
 
-    @agent_app.activity("message")
-    async def on_message(context: TurnContext, state: WorkflowTurnState) -> None:
+    @agent_app.activity("message")  # pyright: ignore[reportUnknownMemberType]
+    async def _on_message(  # pyright: ignore[reportUnusedFunction]
+        context: TurnContext, state: WorkflowTurnState
+    ) -> None:
         """
         Handle incoming message activities.
 
@@ -707,7 +806,9 @@ async def _build_and_start_agent() -> None:
         await _execute_workflow(context, state, user_message)
 
     @agent_app.error
-    async def on_error(context: TurnContext, error: Exception) -> None:
+    async def _on_error(  # pyright: ignore[reportUnusedFunction]
+        context: TurnContext, error: Exception
+    ) -> None:
         """Handle uncaught errors."""
         logger.error(f"\n[on_error] Unhandled error: {error}", exc_info=True)
 
