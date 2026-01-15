@@ -32,6 +32,7 @@ Architecture
 
 import asyncio
 import json
+import logging
 import sys
 import time
 import traceback
@@ -42,7 +43,7 @@ from pathlib import Path
 
 from aiohttp.web import Application, AppRunner, Request, Response, TCPSite
 from dotenv import load_dotenv
-from microsoft_agents.activity import load_configuration_from_env
+from microsoft_agents.activity import Activity, ActivityTypes, Attachment, load_configuration_from_env
 from microsoft_agents.authentication.msal import MsalConnectionManager
 from microsoft_agents.hosting.aiohttp import (
     CloudAdapter,
@@ -68,9 +69,21 @@ from spec_to_agents.models.messages import HumanFeedbackRequest
 from spec_to_agents.workflow.core import build_event_planning_workflow
 
 
-
 # Load environment variables at module import
 load_dotenv()
+
+# Configure logging with environment variable support
+LOG_LEVEL = environ.get("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(
+    level=getattr(logging, LOG_LEVEL, logging.INFO),
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    handlers=[logging.StreamHandler(sys.stdout)],  # Explicitly write to stdout
+    force=True,  # Override any existing configuration
+)
+
+# Initialize module logger
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -147,8 +160,8 @@ async def start_server(
 
     # Start HTTP server using AppRunner (works within existing event loop)
     port = int(environ.get("PORT", 3978))
-    print(f"======== Running on http://localhost:{port} ========")
-    print("(Press CTRL+C to quit)")
+    logger.info(f"======== Running on http://localhost:{port} ========")
+    logger.info("(Press CTRL+C to quit)")
 
     runner = AppRunner(app)
     await runner.setup()
@@ -163,25 +176,20 @@ async def start_server(
     finally:
         await runner.cleanup()
 
-from microsoft_agents.activity import (
-    Activity,
-    ActivityTypes,
-    Attachment,    
-    AttachmentData,
-)
+
 
 
 async def send_typing(context: TurnContext, message: str|None = None) -> None:
     """Send a typing indicator to the user."""
     try:
-        print("💬 Sending typing indicator...")
+        logger.debug("💬 Sending typing indicator...")
         if message:
             typingActivity = Activity(type=ActivityTypes.typing, text=message)
         else:
             typingActivity = Activity(type=ActivityTypes.typing)
         await context.send_activity(typingActivity)
     except Exception as e:
-        print(f"⚠️  Could not send typing indicator: {e}")
+        logger.warning(f"⚠️  Could not send typing indicator: {e}")
 
 
 def generate_context_card(
@@ -253,8 +261,8 @@ def generate_context_card(
         # Send the card
 
     except Exception as e:
-        print(f"⚠️  Could not send agent context card: {e}")
-        traceback.print_exc()
+        logger.warning(f"⚠️  Could not send agent context card: {e}")
+        logger.debug(traceback.format_exc())
     return None
 
 # see how to stream: https://microsoft.github.io/teams-sdk/python/essentials/sending-messages/
@@ -283,9 +291,13 @@ async def _execute_workflow(
         The user's message or response to process
     """
 
-    print("🚀 Executing event planning workflow...")
-    print("Streaming enabled: ", context.streaming_response._is_streaming_channel)
+    logger.info("🚀 Executing event planning workflow...")
+    logger.debug(f"Streaming enabled: {context.streaming_response._is_streaming_channel}")
     context.streaming_response.queue_informative_update("Starting workflow execution...")
+
+    # Track content for recovery in case of stream failure
+    streamed_content = []
+    streamed_attachments = []
 
     try:
         # Get or create workflow instance for this conversation
@@ -295,11 +307,11 @@ async def _execute_workflow(
         
         if conversation_id in _workflow_cache:
             workflow = _workflow_cache[conversation_id]
-            print(f"♻️  Reusing cached workflow for conversation {conversation_id[:8]}...")
+            logger.info(f"♻️  Reusing cached workflow for conversation {conversation_id[:8]}...")
         else:
             workflow = build_event_planning_workflow()
             _workflow_cache[conversation_id] = workflow
-            print(f"🆕 Created new workflow for conversation {conversation_id[:8]}...")
+            logger.info(f"🆕 Created new workflow for conversation {conversation_id[:8]}...")
 
         # Check if responding to pending human-in-the-loop request
         if state.pending_requests:
@@ -310,7 +322,7 @@ async def _execute_workflow(
             }
             state.pending_requests.clear()
             
-            print("🔄 Resuming from HITL")
+            logger.info("🔄 Resuming from HITL")
             stream = workflow.send_responses_streaming(pending_responses)
         else:
             # Normal conversation flow: agent service threads handle history
@@ -332,132 +344,203 @@ async def _execute_workflow(
 
         context.streaming_response.queue_informative_update("Starting workflow streaming...")
         
-        async for event in stream:
-            # Send typing indicator at most once every 5 second
-            current_time = time.time()
-            if current_time - last_typing_time >= 5.0:
-                last_typing_time = current_time
-                await send_typing(context)
-            
-            # Send progress messages every 15 seconds to prevent timeout
-            # M365 Copilot expects responses within ~20-30 seconds
-            if current_time - last_progress_message_time >= 45.0:
-                try:
-                    context.streaming_response.queue_informative_update("⏳ Still working on your event plan... This may take a moment as I coordinate with specialist agents.")
-                    # context.streaming_response.queue_text_chunk("⏳ Still working on your event plan... This may take a moment as I coordinate with specialist agents.")
-                    print("📨 Sent progress update message")
-                    last_progress_message_time = current_time
-                except Exception as e:
-                    print(f"⚠️  Could not send progress message: {e}")
-            
-            # Handle agent run updates - notify user which agent is working
-            if isinstance(event, AgentRunUpdateEvent):
-                # Extract agent name from event data
-                agent_data = event.data
-                agent_name = None
-                
-                # Try to get agent name from event data
-                if hasattr(agent_data, 'author_name'):
-                    agent_name = agent_data.author_name.lower()
-                elif isinstance(agent_data, dict) and 'name' in agent_data:
-                    agent_name = agent_data['name'].lower()
-                
-                # Notify user when a new agent starts working
-                if agent_name and agent_name != last_notified_agent:
-                    # Map agent name to friendly display name
-                    display_name = agent_names.get(agent_name, f"🤖 {agent_name.replace('_', ' ').title()}")
-                    try:
-                        context.streaming_response.queue_informative_update(f"Consulting with {display_name}...")
-                        print(f"👤 Notified user about agent: {display_name}")
-                        last_notified_agent = agent_name
-                    except Exception as e:
-                        print(f"⚠️  Could not send agent notification: {e}")
-
-            # Handle human-in-the-loop requests
-            elif isinstance(event, RequestInfoEvent) and isinstance(event.data, HumanFeedbackRequest):
-                # Workflow is requesting human input
-                feedback_request: HumanFeedbackRequest = event.data
-                state.pending_requests[event.request_id] = feedback_request
-
-                # Try to extract context from last conversation message
-                summary = None
-                next_agent = None
-                user_input_needed = True
-                
-                if feedback_request.conversation and len(feedback_request.conversation) > 0:
-                    last_message = feedback_request.conversation[-1]
+        try:
+            async for event in stream:
+                # Check if stream is still alive before sending updates
+                if context.streaming_response._ended:
+                    logger.warning("⚠️ Stream ended, stopping workflow event processing")
+                    break
                     
-                    # Check if last message has content with text containing JSON
+                # Send typing indicator at most once every 3 seconds
+                current_time = time.time()
+                if current_time - last_typing_time >= 3.0:
+                    last_typing_time = current_time
                     try:
-                        # Get the text from the content
-                        content_text = None
-                        if hasattr(last_message, 'text'):
-                            content_text = last_message.text
+                        await send_typing(context)
+                    except Exception as e:
+                        logger.warning(f"⚠️ Failed to send typing indicator: {e}")
+                        # Connection might be dead, stop processing
+                        break
+            
+                # Send progress messages every 25 seconds to prevent timeout
+                # M365 Copilot expects responses within ~20-30 seconds
+                if current_time - last_progress_message_time >= 25.0:
+                    try:
+                        context.streaming_response.queue_informative_update("⏳ Still working on your event plan... This may take a moment as I coordinate with specialist agents.")
+                        logger.debug("📨 Sent progress update message")
+                        last_progress_message_time = current_time
+                    except Exception as e:
+                        logger.warning(f"⚠️  Could not send progress message: {e}")
+            
+                # Handle agent run updates - notify user which agent is working
+                if isinstance(event, AgentRunUpdateEvent):
+                    # Extract agent name from event data
+                    agent_data = event.data
+                    agent_name = None
+                    
+                    # Try to get agent name from event data
+                    if hasattr(agent_data, 'author_name'):
+                        agent_name = agent_data.author_name.lower()
+                    elif isinstance(agent_data, dict) and 'name' in agent_data:
+                        agent_name = agent_data['name'].lower()
+                    
+                    # Notify user when a new agent starts working
+                    if agent_name and agent_name != last_notified_agent:
+                        # Map agent name to friendly display name
+                        display_name = agent_names.get(agent_name, f"🤖 {agent_name.replace('_', ' ').title()}")
+                        try:
+                            message = f"Consulting with {display_name}..."
+                            context.streaming_response.queue_informative_update(message)
+                            logger.debug(f"👤 Notified user about agent: {display_name}")
+                            last_notified_agent = agent_name
+                        except Exception as e:
+                            logger.warning(f"⚠️  Could not send agent notification: {e}")
+
+                # Handle human-in-the-loop requests
+                elif isinstance(event, RequestInfoEvent) and isinstance(event.data, HumanFeedbackRequest):
+                    # Workflow is requesting human input
+                    feedback_request: HumanFeedbackRequest = event.data
+                    state.pending_requests[event.request_id] = feedback_request
+
+                    # Try to extract context from last conversation message
+                    summary = None
+                    next_agent = None
+                    user_input_needed = True
+                    
+                    if feedback_request.conversation and len(feedback_request.conversation) > 0:
+                        last_message = feedback_request.conversation[-1]
                         
-                        if content_text:
-                            # Try to parse as JSON
-                            context_data = json.loads(content_text)
-                            summary = context_data.get("summary")
-                            next_agent = context_data.get("next_agent")
-                            user_input_needed = context_data.get("user_input_needed", True)
-                            print(f"📝 Extracted context from last message: summary={bool(summary)}, next_agent={next_agent}")
-                    except (json.JSONDecodeError, AttributeError) as e:
-                        print(f"⚠️  Could not parse last message content as JSON: {e}")
+                        # Check if last message has content with text containing JSON
+                        try:
+                            # Get the text from the content
+                            content_text = None
+                            if hasattr(last_message, 'text'):
+                                content_text = last_message.text
+                            
+                            if content_text:
+                                # Try to parse as JSON
+                                context_data = json.loads(content_text)
+                                summary = context_data.get("summary")
+                                next_agent = context_data.get("next_agent")
+                                user_input_needed = context_data.get("user_input_needed", True)
+                                logger.debug(f"📝 Extracted context from last message: summary={bool(summary)}, next_agent={next_agent}")
+                        except (json.JSONDecodeError, AttributeError) as e:
+                            logger.warning(f"⚠️  Could not parse last message content as JSON: {e}")
 
-                # Send adaptive card with agent context if we have summary
-                if summary:
-                    card=generate_context_card(
-                        agent_name=feedback_request.requesting_agent,
-                        summary=summary,
-                        next_agent=next_agent,
-                        user_input_needed=user_input_needed,
+                    # Send adaptive card with agent context if we have summary
+                    if summary:
+                        card=generate_context_card(
+                            agent_name=feedback_request.requesting_agent,
+                            summary=summary,
+                            next_agent=next_agent,
+                            user_input_needed=user_input_needed,
+                        )
+                        from microsoft_agents.hosting.aiohttp.app.streaming.citation import Citation
+                        try:
+                            context.streaming_response.set_citations([Citation(summary,feedback_request.requesting_agent)])
+                            if card:
+                                context.streaming_response.set_attachments([card])
+                        except Exception as e:
+                            logger.warning(f"⚠️  Could not set citations/attachments: {e}")
+                    # Send prompt to user
+                    prompt_message = (
+                        f"**{feedback_request.requesting_agent.replace('_', ' ').title()} needs your input:**\n\n"
+                        f"{feedback_request.prompt}"
                     )
-                    from microsoft_agents.hosting.aiohttp.app.streaming.citation import Citation
-                    context.streaming_response.set_citations([Citation(summary,feedback_request.requesting_agent)])
-                    if card:
-                        context.streaming_response.set_attachments([card])
-                # Send prompt to user
-                prompt_message = (
-                    f"**{feedback_request.requesting_agent.replace('_', ' ').title()} needs your input:**\n\n"
-                    f"{feedback_request.prompt}"
-                )
-                context.streaming_response.queue_text_chunk(prompt_message)
-                print("✋ Sent human feedback request to user")
-                await context.streaming_response.end_stream()
-            # Handle final workflow output
-            elif isinstance(event, WorkflowOutputEvent):
-                state.workflow_output = str(event.data)
-                state.is_workflow_complete = True
+                    try:
+                        context.streaming_response.queue_text_chunk(prompt_message)
+                        logger.info("✋ Sent human feedback request to user")
+                        await context.streaming_response.end_stream()
+                    except Exception as e:
+                        logger.error(f"❌ Failed to send human feedback request: {e}")
+                        break
+                        
+                # Handle final workflow output
+                elif isinstance(event, WorkflowOutputEvent):
+                    state.workflow_output = str(event.data)
+                    state.is_workflow_complete = True
 
-                await context.streaming_response.end_stream()
-                # Send final event plan to user
-                
-                # Try to extract summary from JSON, otherwise use raw output
-                output_text = state.workflow_output
-                try:
-                    output_data = json.loads(state.workflow_output)
-                    if isinstance(output_data, dict) and "summary" in output_data:
-                        output_text = output_data["summary"]
-                except (json.JSONDecodeError, TypeError):
-                    # Not JSON or no summary field, use raw output
-                    pass
+                    try:
+                        await context.streaming_response.end_stream()
+                    except Exception as e:
+                        logger.warning(f"⚠️ Failed to end stream for workflow output: {e}")
+                        
+                    # Send final event plan to user
+                    
+                    # Try to extract summary from JSON, otherwise use raw output
+                    output_text = state.workflow_output
+                    try:
+                        output_data = json.loads(state.workflow_output)
+                        if isinstance(output_data, dict) and "summary" in output_data:
+                            output_text = output_data["summary"]
+                    except (json.JSONDecodeError, TypeError):
+                        # Not JSON or no summary field, use raw output
+                        pass
 
-                await context.send_activity(
-                    f"**✨ Event Plan Complete:**\n\n{output_text}"
-                )
+                    try:
+                        await context.send_activity(
+                            f"**✨ Event Plan Complete:**\n\n{output_text}"
+                        )
+                    except Exception as e:
+                        logger.error(f"❌ Failed to send final output: {e}")
 
-            # Handle workflow status events (informational)
-            elif isinstance(event, WorkflowStatusEvent):
-                pass  # Status events don't contain checkpoint info
+                # Handle workflow status events (informational)
+                elif isinstance(event, WorkflowStatusEvent):
+                    pass  # Status events don't contain checkpoint info
+        
+        except Exception as stream_error:
+            # Agent framework streaming error (e.g., Azure OpenAI API error)
+            logger.error(f"⚠️ Error during stream iteration: {type(stream_error).__name__}: {str(stream_error)}")
+            logger.error(f"Stream error details:\n{traceback.format_exc()}")
+            raise
 
     except Exception as e:
-        await context.streaming_response.end_stream()
+        # Log detailed error information for debugging
+        error_type = type(e).__name__
+        logger.error(f"❌ Workflow execution failed: [{error_type}] {str(e)}")
+        logger.error(f"Full traceback:\n{traceback.format_exc()}")
+        
+        # Check if stream ended early (timeout)
+        stream_ended_early = False
+        
+        try:
+            if not context.streaming_response._ended:
+                await context.streaming_response.end_stream()
+            else:
+                stream_ended_early = True
+                logger.warning("⚠️ Stream already ended (likely due to timeout)")
+        except RuntimeError:
+            # Stream already ended (likely due to timeout)
+            stream_ended_early = True
+            logger.warning("⚠️ Stream already ended, skipping end_stream() call")
 
-        await context.send_activity(
-            f"❌ **Error executing workflow:** {str(e)}\n\n"
-            "Please try again or contact support if the issue persists."
-        )
-        traceback.print_exc()
+        # Build error message
+        error_message = f"❌ **Workflow execution interrupted:** {str(e)}\n\n"
+        
+        # If stream failed and we have tracked content, include it
+        if stream_ended_early and streamed_content:
+            error_message += "**Partial results before interruption:**\n\n"
+            error_message += "\n\n".join(streamed_content)
+            error_message += "\n\n---\n\n"
+            logger.info(f"✅ Recovered {len(streamed_content)} content chunks from tracking")
+        
+        error_message += "Please try again or contact support if the issue persists."
+        
+        # Send as regular activity with any tracked attachments
+        if stream_ended_early and streamed_attachments:
+            # Create Activity object to include attachments
+            activity = Activity(
+                type="message",
+                text=error_message,
+                attachments=streamed_attachments,
+            )
+            logger.info(f"✅ Recovered {len(streamed_attachments)} attachments from tracking")
+            await context.send_activity(activity)
+        else:
+            # Send simple text message
+            await context.send_activity(error_message)
+            
+        logger.error(f"Error executing workflow: {e}", exc_info=True)
         raise        
 
 
@@ -470,7 +553,7 @@ async def main() -> None:
     """
     global _app_container, _mcp_tools_initialized
 
-    print("🚀 Initializing Event Planning Agent Server...")
+    logger.info("🚀 Initializing Event Planning Agent Server...")
 
     # Initialize DI container for MCP tools
     _app_container = AppContainer()
@@ -483,7 +566,7 @@ async def main() -> None:
         if mcp_tools:
             async with AsyncExitStack() as stack:
                 for name, tool in mcp_tools.items():
-                    print(f"🔧 Initializing MCP tool: {name}")
+                    logger.info(f"🔧 Initializing MCP tool: {name}")
                     await stack.enter_async_context(tool)  # type: ignore[arg-type]
 
                 _mcp_tools_initialized = True
@@ -526,9 +609,9 @@ async def _build_and_start_agent() -> None:
     # Log authentication status
     bot_app_id = environ.get("BOT_ID")
     if bot_app_id:
-        print(f"🔐 Authentication configured for production (Bot ID: {bot_app_id[:8]}...)")
+        logger.info(f"🔐 Authentication configured for production (Bot ID: {bot_app_id[:8]}...)")
     else:
-        print("⚠️  Running in anonymous mode (local development only)")
+        logger.warning("⚠️  Running in anonymous mode (local development only)")
 
     # Create AgentApplication
     agent_app = AgentApplication[WorkflowTurnState](
@@ -626,8 +709,7 @@ async def _build_and_start_agent() -> None:
     @agent_app.error
     async def on_error(context: TurnContext, error: Exception) -> None:
         """Handle uncaught errors."""
-        print(f"\n[on_error] Unhandled error: {error}", file=sys.stderr)
-        traceback.print_exc()
+        logger.error(f"\n[on_error] Unhandled error: {error}", exc_info=True)
 
         await context.send_activity(
             "❌ **An unexpected error occurred.**\n\n"
@@ -636,7 +718,7 @@ async def _build_and_start_agent() -> None:
         )
 
     # Start HTTP server (async call)
-    print("✅ Agent application ready!")
+    logger.info("✅ Agent application ready!")
     
     # Get auth configuration from connection manager (standard pattern)
     auth_config = connection_manager.get_default_connection_configuration() if connection_manager else None
@@ -654,10 +736,9 @@ def cli() -> None:
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("\n\n👋 Server stopped by user")
+        logger.info("\n\n👋 Server stopped by user")
     except Exception as e:
-        print(f"\n\n❌ Server error: {e}")
-        traceback.print_exc()
+        logger.error(f"\n\n❌ Server error: {e}", exc_info=True)
         sys.exit(1)
 
 
