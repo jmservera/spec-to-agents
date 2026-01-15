@@ -72,6 +72,7 @@ from agent_framework import (
     RequestInfoEvent,
     WorkflowOutputEvent,
     WorkflowStatusEvent,
+    ExecutorCompletedEvent
 )
 from spec_to_agents.container import AppContainer
 from spec_to_agents.models.messages import HumanFeedbackRequest
@@ -333,8 +334,8 @@ async def _execute_workflow(
             return False
         
     def queue_info_update(info:str):
-        global stream_timed_out
-        global last_progress_message_time
+        nonlocal stream_timed_out
+        nonlocal last_progress_message_time
 
         try:
             if is_stream_alive():
@@ -515,9 +516,9 @@ async def _execute_workflow(
                     # Try streaming first, fall back to regular activity if stream is dead
                     try:
                         if is_stream_alive():
+                            streamed_content.append(prompt_message)
                             streaming.queue_text_chunk(prompt_message)  # pyright: ignore[reportOptionalMemberAccess]
                             logger.info("✋ Sent human feedback request to user (streaming)")
-                            await streaming.end_stream()  # pyright: ignore[reportOptionalMemberAccess]
                         else:
                             # Stream is dead, send as regular activity
                             logger.info("✋ Sending human feedback request via regular activity (stream timed out)")
@@ -542,14 +543,12 @@ async def _execute_workflow(
                     state.workflow_output = str(event.data)
                     state.is_workflow_complete = True
 
+                    # CRITICAL: End stream BEFORE sending final output
                     try:
                         if is_stream_alive():
                             await streaming.end_stream()  # pyright: ignore[reportOptionalMemberAccess]
                     except Exception as e:
-                        if "exceeded streaming time" in str(e).lower() or "forbidden" in str(e).lower():
-                            stream_timed_out = True
-                        else:
-                            logger.warning(f"⚠️ Failed to end stream for workflow output: {e}")
+                        logger.warning(f"⚠️ Failed to end stream for workflow output: {e}")
                         
                     # Send final event plan to user
                     
@@ -558,7 +557,7 @@ async def _execute_workflow(
                     try:
                         output_data = json.loads(state.workflow_output)
                         if isinstance(output_data, dict) and "summary" in output_data:
-                            output_text = str(output_data["summary"])  # pyright: ignore[reportUnknownArgumentType]
+                            output_text = str(output_data["summary"])
                     except (json.JSONDecodeError, TypeError):
                         # Not JSON or no summary field, use raw output
                         pass
@@ -569,10 +568,24 @@ async def _execute_workflow(
                         )
                     except Exception as e:
                         logger.error(f"❌ Failed to send final output: {e}")
-
                 # Handle workflow status events (informational)
                 elif isinstance(event, WorkflowStatusEvent):
                     pass  # Status events don't contain checkpoint info
+                    
+                # Handle executor completed events (informational)
+                elif isinstance(event, ExecutorCompletedEvent):
+                    pass  # Can be used in future for agent completion tracking
+            
+            # Loop completed - end stream if still alive
+            try:
+                if is_stream_alive():
+                    await streaming.end_stream()  # pyright: ignore[reportOptionalMemberAccess]
+                    logger.debug("✅ Stream ended after event loop completed")
+            except Exception as e:
+                if "exceeded streaming time" in str(e).lower() or "forbidden" in str(e).lower():
+                    stream_timed_out = True
+                else:
+                    logger.warning(f"⚠️ Failed to end stream after loop: {e}")
         
         except Exception as stream_error:
             # Agent framework streaming error (e.g., Azure OpenAI API error)
