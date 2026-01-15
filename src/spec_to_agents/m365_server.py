@@ -85,6 +85,10 @@ logging.basicConfig(
 # Initialize module logger
 logger = logging.getLogger(__name__)
 
+# Background worker configuration
+ENABLE_BACKGROUND_WORKER = environ.get("ENABLE_BACKGROUND_WORKER", "false").lower() == "true"
+USE_JOB_QUEUE = environ.get("USE_JOB_QUEUE", "false").lower() == "true"
+
 
 @dataclass
 class WorkflowTurnState(BaseTurnState):
@@ -114,6 +118,10 @@ _mcp_tools_initialized: bool = False
 # Workflow instance cache to preserve agent service threads across HTTP requests
 # Key: conversation_id, Value: workflow instance with agents
 _workflow_cache: dict[str, object] = {}
+
+# Global adapter reference for background worker proactive messaging
+_global_adapter: CloudAdapter | None = None
+_global_bot_app_id: str | None = None
 
 
 async def start_server(
@@ -544,6 +552,73 @@ async def _execute_workflow(
         raise        
 
 
+async def _enqueue_workflow_job(context: TurnContext, user_message: str) -> None:
+    """
+    Enqueue a workflow job for background processing.
+    
+    Creates a job in the background worker queue and sends an immediate
+    acknowledgment to the user with a progress card.
+    
+    Parameters
+    ----------
+    context : TurnContext
+        The turn context for sending responses
+    user_message : str
+        The user's message to process
+    """
+    try:
+        # Import background worker modules
+        from spec_to_agents.background_worker import storage
+        from spec_to_agents.background_worker.cards import progress_card
+        
+        # Get conversation reference for proactive updates
+        conv_ref = context.get_conversation_reference(context.activity)
+        conv_ref_dict = {
+            "activity_id": conv_ref.activity_id,
+            "bot": conv_ref.bot.__dict__ if conv_ref.bot else {},
+            "channel_id": conv_ref.channel_id,
+            "conversation": conv_ref.conversation.__dict__ if conv_ref.conversation else {},
+            "locale": conv_ref.locale,
+            "service_url": conv_ref.service_url,
+            "user": conv_ref.user.__dict__ if conv_ref.user else {},
+        }
+        
+        # Extract user information
+        user_oid = context.activity.from_property.aad_object_id if hasattr(context.activity.from_property, "aad_object_id") else "unknown"
+        tenant_id = context.activity.conversation.tenant_id if hasattr(context.activity.conversation, "tenant_id") else "unknown"
+        
+        # Create job
+        job_spec = storage.new_job(
+            task=user_message,
+            params={},
+            user_oid=user_oid,
+            tenant_id=tenant_id,
+            conv_ref=conv_ref_dict,
+        )
+        
+        logger.info(f"✅ Created background job {job_spec.job_id}")
+        
+        # Send immediate acknowledgment with progress card
+        card = progress_card(job_spec.job_id, 0, "Your request has been queued for processing...")
+        attachment = Attachment(
+            content_type="application/vnd.microsoft.card.adaptive",
+            content=card,
+        )
+        await context.send_activity(
+            Activity(
+                type="message",
+                text="🚀 **Starting event planning workflow...**",
+                attachments=[attachment],
+            )
+        )
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to enqueue job: {e}", exc_info=True)
+        await context.send_activity(
+            "❌ Failed to start workflow. Please check the configuration and try again."
+        )
+
+
 async def main() -> None:
     """
     Initialize the agent application and start the HTTP server.
@@ -583,7 +658,10 @@ async def _build_and_start_agent() -> None:
     Build the AgentApplication with activity handlers and start the server.
 
     This helper function creates the agent after MCP tools are initialized.
+    Also initializes storage and starts background worker if enabled.
     """
+    global _global_adapter, _global_bot_app_id
+    
     # Load configuration from environment variables
     # This reads MICROSOFT_APP_ID, MICROSOFT_APP_TYPE, MICROSOFT_APP_TENANT_ID, etc.
     # CONNECTIONS__SERVICE_CONNECTION__SETTINGS__CLIENTID=client-id
@@ -605,13 +683,26 @@ async def _build_and_start_agent() -> None:
     
     # Create CloudAdapter with connection manager
     adapter = CloudAdapter(connection_manager=connection_manager)
+    _global_adapter = adapter
     
     # Log authentication status
     bot_app_id = environ.get("BOT_ID")
+    _global_bot_app_id = bot_app_id or ""
+    
     if bot_app_id:
         logger.info(f"🔐 Authentication configured for production (Bot ID: {bot_app_id[:8]}...)")
     else:
         logger.warning("⚠️  Running in anonymous mode (local development only)")
+    
+    # Initialize background worker if enabled
+    if ENABLE_BACKGROUND_WORKER and USE_JOB_QUEUE:
+        try:
+            from spec_to_agents.background_worker import storage as bg_storage
+            bg_storage.init_storage()
+            logger.info("✅ Background worker storage initialized")
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize background worker storage: {e}")
+            logger.warning("⚠️  Background worker disabled due to initialization failure")
 
     # Create AgentApplication
     agent_app = AgentApplication[WorkflowTurnState](
@@ -688,6 +779,10 @@ async def _build_and_start_agent() -> None:
 
         This is the main entry point for processing user messages. It executes
         the event planning workflow and manages conversation state.
+        
+        Supports two modes:
+        1. Synchronous mode (USE_JOB_QUEUE=false): Execute workflow inline (may timeout)
+        2. Asynchronous mode (USE_JOB_QUEUE=true): Enqueue job and return immediately
         """
         # Ensure state has our custom attributes (SDK may pass base TurnState)
         if not hasattr(state, 'pending_requests'):
@@ -703,8 +798,13 @@ async def _build_and_start_agent() -> None:
             await context.send_activity("Please provide a message about your event.")
             return
 
-        # Execute workflow
-        await _execute_workflow(context, state, user_message)
+        # Check if job queue mode is enabled
+        if USE_JOB_QUEUE:
+            # Enqueue job for background processing
+            await _enqueue_workflow_job(context, user_message)
+        else:
+            # Execute workflow inline (original behavior)
+            await _execute_workflow(context, state, user_message)
 
     @agent_app.error
     async def on_error(context: TurnContext, error: Exception) -> None:
@@ -722,6 +822,13 @@ async def _build_and_start_agent() -> None:
     
     # Get auth configuration from connection manager (standard pattern)
     auth_config = connection_manager.get_default_connection_configuration() if connection_manager else None
+    
+    # Start background worker if enabled
+    if ENABLE_BACKGROUND_WORKER and USE_JOB_QUEUE and _global_adapter and _global_bot_app_id:
+        from spec_to_agents.background_worker.worker import worker_loop
+        # Start worker in background task
+        asyncio.create_task(worker_loop(_global_adapter, _global_bot_app_id))
+        logger.info("✅ Background worker started")
     
     await start_server(agent_app, auth_config)
 
