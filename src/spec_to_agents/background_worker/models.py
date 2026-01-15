@@ -85,6 +85,6 @@ def to_dict(obj: Any) -> dict[str, Any]:
     dict[str, Any]
         Dictionary representation of the object
     """
-    if hasattr(obj, "__dict__"):
-        return asdict(obj)  # type: ignore[no-any-return]
-    return {"value": obj}  # type: ignore[return-value]
+    if hasattr(obj, "__dataclass_fields__"):
+        return asdict(obj)
+    return {"value": obj}

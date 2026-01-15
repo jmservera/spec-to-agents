@@ -285,7 +285,7 @@ def dequeue() -> str | None:
                 job_id = body.get("job_id")
                 if job_id:
                     logger.info(f"📦 Dequeued job {job_id}")
-                    return job_id  # type: ignore[no-any-return]
+                    return str(job_id)
             except Exception as e:
                 logger.error(f"❌ Failed to process queue message: {e}")
         return None

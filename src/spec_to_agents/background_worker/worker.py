@@ -8,6 +8,7 @@ import os
 import time
 from typing import Any
 
+from agent_framework import WorkflowOutputEvent
 from microsoft_agents.hosting.aiohttp import CloudAdapter
 
 from spec_to_agents.background_worker import proactive, storage
@@ -82,9 +83,8 @@ async def do_work_chunk(
                     summary = f"Processing event planning workflow... ({event_count} events processed)"
                     next_cursor = f"event_{event_count}"
                     return next_cursor, percent, summary, None
-                
+
                 # Check for workflow output
-                from agent_framework import WorkflowOutputEvent
                 if isinstance(event, WorkflowOutputEvent):
                     result_text = str(event.data)
                     break

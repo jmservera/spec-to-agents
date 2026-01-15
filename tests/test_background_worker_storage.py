@@ -25,7 +25,7 @@ def mock_storage_clients():
     """Mock Azure Storage clients."""
     with patch("spec_to_agents.background_worker.storage._get_table_client") as mock_table, \
          patch("spec_to_agents.background_worker.storage._get_queue_client") as mock_queue:
-        
+
         # Create mock clients
         table_client = MagicMock()
         queue_client = MagicMock()
