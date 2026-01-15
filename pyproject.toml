@@ -29,7 +29,10 @@ dependencies = [
     "microsoft-agents-hosting-core>=0.6.0",
     "microsoft-agents-hosting-aiohttp>=0.6.0",
     "microsoft-agents-authentication-msal>=0.7.0.dev12",
-    "microsoft-agents-activity>=0.7.0.dev12"
+    "microsoft-agents-activity>=0.7.0.dev12",
+    # Azure Storage for background worker
+    "azure-data-tables>=12.4.0",
+    "azure-storage-queue>=12.6.0"
 ]
 
 [project.scripts]
