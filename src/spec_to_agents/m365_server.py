@@ -15,33 +15,38 @@ Activity protocol: https://learn.microsoft.com/en-us/microsoft-365/agents-sdk/ac
 Pattern
 -------
 This follows the Microsoft 365 Agents SDK hosting pattern:
-1. Create AgentApplication with storage and adapter
-2. Register activity handlers using decorators (@AGENT_APP.activity)
-3. Process messages by invoking the workflow
-4. Return responses via TurnContext.send_activity()
-5. Use TurnState to manage conversation state across turns
+1. Create AgentApplication with CloudAdapter for channel communication
+2. Configure Bot Service authentication via MsalConnectionManager and JWT middleware
+3. Register activity handlers using decorators (@agent_app.activity, @agent_app.message)
+4. Process messages by invoking the workflow with streaming event handling
+5. Return responses via TurnContext.send_activity() or streaming APIs
 
 Architecture
 ------------
-- **AgentApplication**: Replaces the CLI interaction with HTTP endpoints
-- **TurnContext**: Provides access to incoming activity and conversation state
-- **TurnState**: Tracks workflow state, pending requests, and outputs
+- **AgentApplication**: Provides HTTP endpoint for M365 channels (Teams, Copilot, etc.)
+- **MsalConnectionManager**: Handles Bot Service authentication using Managed Identity or app credentials
+- **JWT Middleware**: Validates incoming requests from Microsoft channels
+- **TurnContext**: Provides access to incoming activity and streaming response APIs
+- **WorkflowTurnState**: Tracks pending human-in-the-loop requests across conversation turns
+- **Workflow Cache**: Preserves workflow instances per conversation to maintain agent service threads
 - **CloudAdapter**: Handles communication with Microsoft channels
-- **Workflow Integration**: Executes existing agent_framework workflow within activity handlers
 """
 
 import asyncio
 import json
 import logging
+import os
 import sys
 import time
 import traceback
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
+from logging import WARNING, getLogger
 from os import environ
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from agent_framework.observability import setup_observability
 from aiohttp.web import Application, AppRunner, Request, Response, TCPSite
 from dotenv import load_dotenv
 from microsoft_agents.activity import (
@@ -83,6 +88,13 @@ from spec_to_agents.workflow.core import build_event_planning_workflow
 
 # Load environment variables at module import
 load_dotenv()
+
+# Enable observability (skip in container environments if not configured)
+if not (os.getenv("CONTAINER_ENV") == "true" and not os.getenv("APPLICATIONINSIGHTS_CONNECTION_STRING")):
+    setup_observability()
+
+getLogger("azure.monitor.opentelemetry.exporter.export._base").setLevel(WARNING)
+getLogger("azure.core.pipeline.policies.http_logging_policy").setLevel(WARNING)
 
 # Configure logging with environment variable support
 LOG_LEVEL = environ.get("LOG_LEVEL", "INFO").upper()
@@ -288,10 +300,9 @@ async def _execute_workflow(context: TurnContext, state: WorkflowTurnState, user
     activity handler pattern. It processes streaming events from the workflow
     and converts them to activity messages.
 
-    NOTE: The workflow is recreated fresh on each turn because Azure AI agent
-    service threads don't properly survive MemoryStorage serialization. This
-    means agents rely on the conversation history passed via the workflow's
-    message context rather than persistent service threads.
+    NOTE: Workflow instances are cached per conversation_id in `_workflow_cache`
+    to preserve agent service threads across HTTP requests. This ensures
+    conversation history is maintained without requiring manual message tracking.
 
     Parameters
     ----------
@@ -302,8 +313,13 @@ async def _execute_workflow(context: TurnContext, state: WorkflowTurnState, user
     user_message : str
         The user's message or response to process
     """
-    logger.info("🚀 Executing event planning workflow...")
+    logger.info(
+        "🚀 Executing event planning workflow...\n\tStart time: %s\n\tConversation ID: %s",
+        time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
+        context.activity.conversation.id,
+    )
 
+    start_time = time.time()
     last_typing_time = time.time()
     last_progress_message_time = time.time()
     last_notified_agent = None
@@ -311,12 +327,11 @@ async def _execute_workflow(context: TurnContext, state: WorkflowTurnState, user
     # Access streaming response - it may be None in non-streaming contexts
     streaming = context.streaming_response
     stream_timed_out = False  # Track if streaming timed out
+    streaming_stopped = False  # Track if we stopped streaming manually
 
     def is_stream_alive() -> bool:
         """Check if the streaming response is still usable."""
-        if not streaming:
-            return False
-        if stream_timed_out:
+        if not streaming or streaming_stopped or stream_timed_out:
             return False
         try:
             return not streaming._ended  # pyright: ignore[reportPrivateUsage]
@@ -387,13 +402,13 @@ async def _execute_workflow(context: TurnContext, state: WorkflowTurnState, user
         try:
             async for event in stream:  # pyright: ignore[reportUnknownVariableType]
                 # Check if stream is still alive before sending updates
-                if not is_stream_alive():
+                if not is_stream_alive() and not streaming_stopped:
                     logger.warning("⚠️ Stream ended/timed out, continuing workflow without streaming...")
                     # Don't break - continue processing events, just skip streaming updates
 
-                # Send typing indicator at most once every 1 second
+                # Send typing indicator at most once every 5 seconds
                 current_time = time.time()
-                if current_time - last_typing_time >= 1.0:
+                if current_time - last_typing_time >= 5.0:
                     last_typing_time = current_time
                     try:
                         await send_typing(context)
@@ -406,9 +421,24 @@ async def _execute_workflow(context: TurnContext, state: WorkflowTurnState, user
                             logger.warning(f"⚠️ Failed to send typing indicator: {e}")
                         # Continue processing - don't break
 
-                # Send progress messages every 25 seconds to prevent timeout
+                if current_time - start_time >= 90.0 and not streaming_stopped:
+                    streaming_stopped = True
+                    logger.warning("⚠️ Workflow execution time exceeded 90 seconds, stopping updates")
+                    try:
+                        streaming.queue_text_chunk(  # pyright: ignore[reportOptionalMemberAccess]
+                            "⏳ Still working on your event plan... I will send the final details shortly."
+                        )
+                        await streaming.end_stream()  # pyright: ignore[reportOptionalMemberAccess]
+                        logger.debug("✅ Stream ended due to time limit")
+                    except Exception as e:
+                        if "exceeded streaming time" in str(e).lower() or "forbidden" in str(e).lower():
+                            stream_timed_out = True
+                        else:
+                            logger.warning(f"⚠️ Failed to end stream after time limit: {e}")
+
+                # Send progress messages every 10 seconds to prevent early timeout
                 # M365 Copilot expects responses within ~20-30 seconds
-                if current_time - last_progress_message_time >= 20.0:
+                elif current_time - last_progress_message_time >= 10.0:
                     queue_info_update(
                         "⏳ Still working on your event plan... "
                         "This may take a moment as I coordinate with specialist agents."
@@ -485,18 +515,16 @@ async def _execute_workflow(context: TurnContext, state: WorkflowTurnState, user
                             next_agent=next_agent,
                             user_input_needed=user_input_needed,
                         )
-                        from microsoft_agents.hosting.aiohttp.app.streaming.citation import Citation
-
-                        try:
-                            if is_stream_alive():
-                                streaming.set_citations([Citation(summary, feedback_request.requesting_agent)])  # pyright: ignore[reportOptionalMemberAccess]
-                                if card:
+                        if card:
+                            streamed_attachments.append(card)  # Track for recovery if stream fails
+                            try:
+                                if is_stream_alive():
                                     streaming.set_attachments([card])  # pyright: ignore[reportOptionalMemberAccess]
-                        except Exception as e:
-                            if "exceeded streaming time" in str(e).lower() or "forbidden" in str(e).lower():
-                                stream_timed_out = True
-                            else:
-                                logger.warning(f"⚠️  Could not set citations/attachments: {e}")
+                            except Exception as e:
+                                if "exceeded streaming time" in str(e).lower() or "forbidden" in str(e).lower():
+                                    stream_timed_out = True
+                                else:
+                                    logger.warning(f"⚠️  Could not set citations/attachments: {e}")
 
                     # Send prompt to user
                     prompt_message = (
@@ -506,14 +534,30 @@ async def _execute_workflow(context: TurnContext, state: WorkflowTurnState, user
 
                     # Try streaming first, fall back to regular activity if stream is dead
                     try:
+                        streamed_content.append(prompt_message)
                         if is_stream_alive():
-                            streamed_content.append(prompt_message)
                             streaming.queue_text_chunk(prompt_message)  # pyright: ignore[reportOptionalMemberAccess]
                             logger.info("✋ Sent human feedback request to user (streaming)")
                         else:
-                            # Stream is dead, send as regular activity
+                            # Stream is dead, send as regular activity with attachments if any
+                            if streamed_attachments:
+                                # Create Activity object to include attachments
+                                activity = Activity(  # pyright: ignore[reportCallIssue]
+                                    type="message",
+                                    text="\n".join(streamed_content),
+                                    attachments=streamed_attachments,
+                                )
+                                logger.info(
+                                    f"✅ Recovered {len(streamed_attachments)} attachments from tracking for HITL"
+                                )
+                            else:
+                                activity = Activity(  # pyright: ignore[reportCallIssue]
+                                    type="message",
+                                    text="\n".join(streamed_content),
+                                )
+
                             logger.info("✋ Sending human feedback request via regular activity (stream timed out)")
-                            await context.send_activity(prompt_message)
+                            await context.send_activity(activity)
                     except Exception as e:
                         # If streaming failed, try regular activity as fallback
                         if "exceeded streaming time" in str(e).lower() or "forbidden" in str(e).lower():
