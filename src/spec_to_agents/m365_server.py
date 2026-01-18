@@ -12,6 +12,12 @@ Implementation example: https://learn.microsoft.com/en-us/microsoft-365/agents-s
 More info at: https://learn.microsoft.com/en-us/microsoft-agent-365/developer/testing?tabs=python
 Activity protocol: https://learn.microsoft.com/en-us/microsoft-365/agents-sdk/activity-protocol
 
+Important information regarding streaming responses in M365 Copilot:
+- You are not supposed to send "Typing" activities after starting sending chunks.
+- For this reason, any queue_informative_update() calls should happen before queue_text_chunk() calls.
+
+https://learn.microsoft.com/en-us/javascript/api/%40microsoft/agents-hosting/streamingresponse?view=agents-sdk-js-latest
+
 Pattern
 -------
 This follows the Microsoft 365 Agents SDK hosting pattern:
@@ -84,6 +90,7 @@ from agent_framework import (
 
 from spec_to_agents.container import AppContainer
 from spec_to_agents.models.messages import HumanFeedbackRequest
+from spec_to_agents.utils.copilot_display import AGENT_ICONS, get_agent_icon
 from spec_to_agents.workflow.core import build_event_planning_workflow
 
 # Load environment variables at module import
@@ -206,26 +213,8 @@ async def start_server(
         await runner.cleanup()
 
 
-async def send_typing(context: TurnContext, message: str | None = None) -> None:
-    """Send a typing indicator to the user."""
-    try:
-        logger.debug("💬 Sending typing indicator...")
-        # Activity constructor requires 'from_property' but it's auto-set by the adapter
-        if message:
-            typingActivity = Activity(  # pyright: ignore[reportCallIssue]
-                type=ActivityTypes.typing,
-                text=message,
-            )
-        else:
-            typingActivity = Activity(  # pyright: ignore[reportCallIssue]
-                type=ActivityTypes.typing,
-            )
-        await context.send_activity(typingActivity)
-    except Exception as e:
-        logger.warning(f"⚠️  Could not send typing indicator: {e}")
-
-
 def generate_context_card(
+    agent_icon: str | None,
     agent_name: str,
     summary: str,
     next_agent: str | None,
@@ -252,8 +241,6 @@ def generate_context_card(
             card_template = json.load(f)
 
         # Prepare data for card
-        # Format agent name nicely
-        formatted_agent_name = agent_name.replace("_", " ").title()
 
         # Format next agent
         formatted_next_agent = next_agent.replace("_", " ").title() if next_agent else "None"
@@ -273,7 +260,8 @@ def generate_context_card(
 
         # Replace template variables with sanitized values
         card_json = json.dumps(card_template)
-        card_json = card_json.replace("${agent_name}", sanitize_for_json(formatted_agent_name))  # noqa: RUF027
+        card_json = card_json.replace("${agent_icon}", sanitize_for_json(agent_icon or "🤖"))  # noqa: RUF027
+        card_json = card_json.replace("${agent_name}", sanitize_for_json(agent_name))  # noqa: RUF027
         card_json = card_json.replace("${summary}", sanitize_for_json(summary))  # noqa: RUF027
         card_json = card_json.replace("${next_agent}", sanitize_for_json(formatted_next_agent))  # noqa: RUF027
         card_json = card_json.replace("${status}", sanitize_for_json(status))  # noqa: RUF027
@@ -328,6 +316,9 @@ async def _execute_workflow(context: TurnContext, state: WorkflowTurnState, user
     streaming = context.streaming_response
     stream_timed_out = False  # Track if streaming timed out
     streaming_stopped = False  # Track if we stopped streaming manually
+    # Track content for recovery in case of stream failure
+    streamed_content: list[str] = []
+    streamed_attachments: list[Attachment] = []
 
     def is_stream_alive() -> bool:
         """Check if the streaming response is still usable."""
@@ -338,29 +329,147 @@ async def _execute_workflow(context: TurnContext, state: WorkflowTurnState, user
         except Exception:
             return False
 
-    def queue_info_update(info: str):
+    already_queued_text = False
+
+    async def queue_info_update(info: str | None):
         nonlocal stream_timed_out
         nonlocal last_progress_message_time
+        nonlocal last_typing_time
+
+        last_typing_time = time.time()
+
+        if not already_queued_text:
+            # As we didn't queue any chunk yet, we can send informative update
+            try:
+                if is_stream_alive():
+                    if info:
+                        streaming.queue_informative_update(info)  # pyright: ignore[reportOptionalMemberAccess]
+                    else:
+                        await context.send_activity(
+                            Activity(  # pyright: ignore[reportCallIssue]
+                                type=ActivityTypes.typing
+                            )
+                        )
+                    logger.debug("📨 Sent progress update message")
+                last_progress_message_time = time.time()
+            except Exception as e:
+                if "exceeded streaming time" in str(e).lower() or "forbidden" in str(e).lower():
+                    logger.warning("⚠️ Stream timed out during progress update")
+                    stream_timed_out = True
+                else:
+                    logger.warning(f"⚠️  Could not send progress message: {e}")
+        else:
+            last_progress_message_time = time.time()
+            logger.debug("ℹ️  Skipping progress update, text already queued")  # noqa: RUF001
+
+    async def queue_attachment(attachment: Attachment) -> None:
+        """Queue an attachment to be sent via streaming response."""
+        nonlocal stream_timed_out
+        nonlocal streamed_attachments
+        nonlocal already_queued_text
+
+        streamed_attachments.append(attachment)  # Track for recovery if stream fails
 
         try:
             if is_stream_alive():
-                streaming.queue_informative_update(info)  # pyright: ignore[reportOptionalMemberAccess]
-                logger.debug("📨 Sent progress update message")
-            last_progress_message_time = time.time()
+                streaming.set_attachments(streamed_attachments)  # pyright: ignore[reportOptionalMemberAccess]
+                logger.debug("📎 Queued attachment for streaming response")
+            else:
+                logger.debug("ℹ️  Stream not alive, sending attachment directly")  # noqa: RUF001
+                already_queued_text = True
+                await context.send_activity(
+                    Activity(  # pyright: ignore[reportCallIssue]
+                        type="message",
+                        attachments=streamed_attachments,
+                    )
+                )
+                streamed_attachments.clear()  # Clear after sending
         except Exception as e:
             if "exceeded streaming time" in str(e).lower() or "forbidden" in str(e).lower():
-                logger.warning("⚠️ Stream timed out during progress update")
+                logger.warning("⚠️ Stream timed out during attachment queuing")
                 stream_timed_out = True
             else:
-                logger.warning(f"⚠️  Could not send progress message: {e}")
+                logger.warning(f"⚠️  Could not queue attachment: {e}")
+
+    def queue_text_activity(text: str) -> None:
+        """Send a text activity to the user."""
+        nonlocal already_queued_text
+        nonlocal stream_timed_out
+        nonlocal streamed_attachments
+        nonlocal streamed_content
+
+        streamed_content.append(text)  # Track for recovery if stream fails
+        already_queued_text = True
+        try:
+            logger.debug("💬 Sending text activity...")
+            if is_stream_alive():
+                streaming.queue_text_chunk(text)  # pyright: ignore[reportOptionalMemberAccess]
+            else:
+                # Do nothing, will send the text as an activity later...
+                logger.debug("ℹ️  Stream not alive, caching text for later activity")  # noqa: RUF001
+            logger.debug("✅ Text activity sent")
+        except Exception as e:
+            if "exceeded streaming time" in str(e).lower() or "forbidden" in str(e).lower():
+                logger.warning("⚠️ Stream timed out during text update, MESSAGE NOT SENT")
+                stream_timed_out = True
+            else:
+                logger.warning(f"⚠️  Could not send text activity: {e}")
+
+    async def flush_queue_and_end_stream() -> None:
+        """Flush any queued content and end the streaming response."""
+        nonlocal stream_timed_out
+        nonlocal streamed_attachments
+        nonlocal streamed_content
+        nonlocal streaming_stopped
+
+        not_flushed = False
+        activity: Activity | None = None
+        try:
+            if is_stream_alive():
+                await streaming.end_stream()  # pyright: ignore[reportOptionalMemberAccess]
+                streaming_stopped = True
+                streamed_attachments.clear()  # Clear after sending
+                streamed_content.clear()  # Clear after sending
+                logger.debug("✅ Stream flushed and ended")
+            else:
+                not_flushed = True
+                if not streaming_stopped:
+                    logger.debug("⚠️ Stream not alive, could not flush/end")
+        except Exception as e:
+            if "exceeded streaming time" in str(e).lower() or "forbidden" in str(e).lower():
+                logger.warning("⚠️ Stream timed out during flush/end")
+                stream_timed_out = True
+            else:
+                logger.warning(f"⚠️ Failed to flush/end stream: {e}")
+            not_flushed = True
+
+        if not_flushed:
+            try:
+                if len(streamed_attachments) > 0:
+                    # Create Activity object to include attachments
+                    activity = Activity(  # pyright: ignore[reportCallIssue]
+                        type="message",
+                        text="".join(streamed_content),
+                        attachments=streamed_attachments,
+                    )
+                else:
+                    message = "".join(streamed_content)
+                    if len(message) >= 0:
+                        activity = Activity(  # pyright: ignore[reportCallIssue]
+                            type="message",
+                            text=message,
+                        )
+                if activity:
+                    await context.send_activity(activity)
+                    logger.debug("✅ Sent queued content as regular activity")
+                streamed_attachments.clear()  # Clear after sending
+                streamed_content.clear()  # Clear after sending
+            except Exception as e:
+                logger.error(f"❌ Failed to send queued content as activity: {e}")
 
     if streaming:
         logger.debug(f"🐞 Streaming enabled: {streaming._is_streaming_channel}")  # pyright: ignore[reportPrivateUsage]
-        queue_info_update("Starting workflow execution...")
-
-    # Track content for recovery in case of stream failure
-    streamed_content: list[str] = []
-    streamed_attachments: list[Attachment] = []
+        await queue_info_update("Starting workflow execution...")
 
     try:
         # Get or create workflow instance for this conversation
@@ -397,7 +506,7 @@ async def _execute_workflow(context: TurnContext, state: WorkflowTurnState, user
             "coordinator": "🎯 Event Coordinator",
         }
 
-        queue_info_update("Starting workflow streaming...")  # pyright: ignore[reportOptionalMemberAccess]
+        await queue_info_update("Starting workflow streaming...")  # pyright: ignore[reportOptionalMemberAccess]
 
         try:
             async for event in stream:  # pyright: ignore[reportUnknownVariableType]
@@ -408,28 +517,15 @@ async def _execute_workflow(context: TurnContext, state: WorkflowTurnState, user
 
                 # Send typing indicator at most once every 5 seconds
                 current_time = time.time()
-                if current_time - last_typing_time >= 5.0:
-                    last_typing_time = current_time
-                    try:
-                        await send_typing(context)
-                    except Exception as e:
-                        # Check if this is a stream timeout error
-                        if "exceeded streaming time" in str(e).lower() or "forbidden" in str(e).lower():
-                            logger.warning("⚠️ Stream timed out, switching to non-streaming mode")
-                            stream_timed_out = True
-                        else:
-                            logger.warning(f"⚠️ Failed to send typing indicator: {e}")
-                        # Continue processing - don't break
 
                 if current_time - start_time >= 90.0 and not streaming_stopped:
-                    streaming_stopped = True
                     logger.warning("⚠️ Workflow execution time exceeded 90 seconds, stopping updates")
                     try:
-                        streaming.queue_text_chunk(  # pyright: ignore[reportOptionalMemberAccess]
+                        queue_text_activity(
                             "⏳ Still working on your event plan... I will send the final details shortly."
                         )
-                        await streaming.end_stream()  # pyright: ignore[reportOptionalMemberAccess]
-                        logger.debug("✅ Stream ended due to time limit")
+                        await flush_queue_and_end_stream()
+                        logger.debug("✅ Stream proactively closed due to time limit")
                     except Exception as e:
                         if "exceeded streaming time" in str(e).lower() or "forbidden" in str(e).lower():
                             stream_timed_out = True
@@ -439,10 +535,13 @@ async def _execute_workflow(context: TurnContext, state: WorkflowTurnState, user
                 # Send progress messages every 10 seconds to prevent early timeout
                 # M365 Copilot expects responses within ~20-30 seconds
                 elif current_time - last_progress_message_time >= 10.0:
-                    queue_info_update(
-                        "⏳ Still working on your event plan... "
+                    await queue_info_update(
+                        "⏳ Still working on your event plan... \n"
                         "This may take a moment as I coordinate with specialist agents."
                     )
+                elif current_time - last_typing_time >= 5.0:
+                    last_typing_time = current_time
+                    await queue_info_update(None)
 
                 # Handle agent run updates - notify user which agent is working
                 if isinstance(event, AgentRunUpdateEvent):
@@ -461,10 +560,13 @@ async def _execute_workflow(context: TurnContext, state: WorkflowTurnState, user
                     # Notify user when a new agent starts working
                     if agent_name and agent_name != last_notified_agent:
                         # Map agent name to friendly display name
-                        display_name = agent_names.get(agent_name, f"🤖 {agent_name.replace('_', ' ').title()}")
+                        agent_icon = get_agent_icon(event.executor_id)
+                        display_name = agent_names.get(
+                            agent_name, f"{agent_icon} {agent_name.replace('_', ' ').title()}"
+                        )
                         try:
                             message = f"Consulting with {display_name}..."
-                            queue_info_update(message)
+                            await queue_info_update(message)
                             logger.debug(f"👤 Notified user about agent: {display_name}")
                             last_notified_agent = agent_name
                         except Exception as e:
@@ -507,71 +609,39 @@ async def _execute_workflow(context: TurnContext, state: WorkflowTurnState, user
                         except (json.JSONDecodeError, AttributeError) as e:
                             logger.warning(f"⚠️  Could not parse last message content as JSON: {e}")
 
+                    requesting_agent_name = feedback_request.requesting_agent.title()
+                    requesting_agent_icon = AGENT_ICONS.get(feedback_request.requesting_agent.lower(), "🤖")
+
                     # Send adaptive card with agent context if we have summary
                     if summary:
                         card = generate_context_card(
-                            agent_name=feedback_request.requesting_agent,
+                            agent_icon=requesting_agent_icon,
+                            agent_name=requesting_agent_name,
                             summary=summary,
                             next_agent=next_agent,
                             user_input_needed=user_input_needed,
                         )
                         if card:
-                            streamed_attachments.append(card)  # Track for recovery if stream fails
-                            try:
-                                if is_stream_alive():
-                                    streaming.set_attachments([card])  # pyright: ignore[reportOptionalMemberAccess]
-                            except Exception as e:
-                                if "exceeded streaming time" in str(e).lower() or "forbidden" in str(e).lower():
-                                    stream_timed_out = True
-                                else:
-                                    logger.warning(f"⚠️  Could not set citations/attachments: {e}")
+                            if streaming and is_stream_alive():
+                                text = "".join(streamed_content)
+                                if len(text) == 0:
+                                    source = event.source_executor_id.replace("_", " ").title()
+                                    queue_text_activity(
+                                        f"{get_agent_icon(event.source_executor_id)} {source} "
+                                        f"delegated to {requesting_agent_icon} "
+                                        f"{requesting_agent_name}."
+                                    )  # Ensure at least one text chunk
+                            await queue_attachment(card)
+                            await flush_queue_and_end_stream()
 
                     # Send prompt to user
                     prompt_message = (
-                        f"**{feedback_request.requesting_agent.replace('_', ' ').title()} needs your input:**\n\n"
+                        f"{requesting_agent_icon} **{requesting_agent_name} needs your input:**\n\n"
                         f"{feedback_request.prompt}"
                     )
 
-                    # Try streaming first, fall back to regular activity if stream is dead
-                    try:
-                        streamed_content.append(prompt_message)
-                        if is_stream_alive():
-                            streaming.queue_text_chunk(prompt_message)  # pyright: ignore[reportOptionalMemberAccess]
-                            logger.info("✋ Sent human feedback request to user (streaming)")
-                        else:
-                            # Stream is dead, send as regular activity with attachments if any
-                            if streamed_attachments:
-                                # Create Activity object to include attachments
-                                activity = Activity(  # pyright: ignore[reportCallIssue]
-                                    type="message",
-                                    text="\n".join(streamed_content),
-                                    attachments=streamed_attachments,
-                                )
-                                logger.info(
-                                    f"✅ Recovered {len(streamed_attachments)} attachments from tracking for HITL"
-                                )
-                            else:
-                                activity = Activity(  # pyright: ignore[reportCallIssue]
-                                    type="message",
-                                    text="\n".join(streamed_content),
-                                )
-
-                            logger.info("✋ Sending human feedback request via regular activity (stream timed out)")
-                            await context.send_activity(activity)
-                    except Exception as e:
-                        # If streaming failed, try regular activity as fallback
-                        if "exceeded streaming time" in str(e).lower() or "forbidden" in str(e).lower():
-                            stream_timed_out = True
-                            logger.warning("⚠️ Stream timed out, falling back to regular activity")
-                            try:
-                                await context.send_activity(prompt_message)
-                                logger.info("✋ Sent human feedback request via fallback activity")
-                            except Exception as fallback_error:
-                                logger.error(f"❌ Failed to send human feedback request via fallback: {fallback_error}")
-                                break
-                        else:
-                            logger.error(f"❌ Failed to send human feedback request: {e}")
-                            break
+                    queue_text_activity(prompt_message)
+                    await flush_queue_and_end_stream()
 
                 # Handle final workflow output
                 elif isinstance(event, WorkflowOutputEvent):
@@ -580,8 +650,7 @@ async def _execute_workflow(context: TurnContext, state: WorkflowTurnState, user
 
                     # CRITICAL: End stream BEFORE sending final output
                     try:
-                        if is_stream_alive():
-                            await streaming.end_stream()  # pyright: ignore[reportOptionalMemberAccess]
+                        await flush_queue_and_end_stream()
                     except Exception as e:
                         logger.warning(f"⚠️ Failed to end stream for workflow output: {e}")
 
@@ -599,6 +668,7 @@ async def _execute_workflow(context: TurnContext, state: WorkflowTurnState, user
                     except (json.JSONDecodeError, TypeError):
                         # Not JSON or no summary field, use raw output
                         output_text = state.workflow_output
+
                     try:
                         await context.send_activity(f"**✨ Event Plan Complete:**\n\n{output_text}")
                     except Exception as e:
@@ -614,8 +684,10 @@ async def _execute_workflow(context: TurnContext, state: WorkflowTurnState, user
             # Loop completed - end stream if still alive
             try:
                 if is_stream_alive():
-                    await streaming.end_stream()  # pyright: ignore[reportOptionalMemberAccess]
                     logger.debug("✅ Stream ended after event loop completed")
+                else:
+                    logger.debug("ℹ️  Stream already ended after event loop")  # noqa: RUF001
+                await flush_queue_and_end_stream()
             except Exception as e:
                 if "exceeded streaming time" in str(e).lower() or "forbidden" in str(e).lower():
                     stream_timed_out = True
@@ -638,11 +710,7 @@ async def _execute_workflow(context: TurnContext, state: WorkflowTurnState, user
         stream_ended_early = False
 
         try:
-            if is_stream_alive():
-                await streaming.end_stream()  # pyright: ignore[reportOptionalMemberAccess]
-            elif streaming:
-                stream_ended_early = True
-                logger.warning("⚠️ Stream already ended (likely due to timeout)")
+            await flush_queue_and_end_stream()
         except RuntimeError:
             # Stream already ended (likely due to timeout)
             stream_ended_early = True

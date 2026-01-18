@@ -16,7 +16,7 @@
               "items": [
                 {
                   "type": "TextBlock",
-                  "text": "🤖",
+                  "text": "${agent_icon}",
                   "size": "Large",
                   "weight": "Bolder"
                 }
