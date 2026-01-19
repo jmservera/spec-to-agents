@@ -808,20 +808,49 @@ async def _build_and_start_agent() -> None:
     storage = MemoryStorage()
 
     # Create connection manager using MSAL authentication
-    # This handles token acquisition for Bot Framework service calls
+    # This handles token acquisition for Bot Framework service calls (outbound auth)
+    # Required for the adapter to send messages back to channels
+    # The load_configuration_from_env parses CONNECTIONS__SERVICE_CONNECTION__SETTINGS__* env vars
     connection_manager: MsalConnectionManager | None = None
 
-    if environ.get("CONNECTIONS__SERVICE_CONNECTION__SETTINGS__AUTH_TYPE", "").lower() == "usermanagedidentity":
-        # Use User Managed Identity authentication
+    # Check if CONNECTIONS config is available (either from Managed Identity or client credentials)
+    connections_config = agents_sdk_config.get("CONNECTIONS", {})
+    if connections_config.get("SERVICE_CONNECTION"):
+        auth_type = connections_config.get("SERVICE_CONNECTION", {}).get("SETTINGS", {}).get("AUTH_TYPE", "unknown")
+        client_id = connections_config.get("SERVICE_CONNECTION", {}).get("SETTINGS", {}).get("CLIENTID", "")
+        logger.info(f"🔐 Using {auth_type} for outbound auth (clientId: {client_id[:8] if client_id else 'N/A'}...)")
         connection_manager = MsalConnectionManager(**agents_sdk_config)  # pyright: ignore[reportUnknownArgumentType]
+    else:
+        logger.warning("⚠️  No outbound auth configured - responses may fail in production channels")
 
     # Create CloudAdapter with connection manager
     adapter = CloudAdapter(connection_manager=connection_manager)  # pyright: ignore[reportArgumentType]
 
-    # Log authentication status
+    # Configure JWT validation for incoming requests
+    # This is required when running locally with a dev tunnel connected to a real Copilot endpoint
     bot_app_id = environ.get("BOT_ID")
+    bot_tenant_id = environ.get("TEAMS_APP_TENANT_ID")
+    auth_config: AgentAuthConfiguration | None = None
+
+    # Debug: Log raw environment variable values
+    logger.debug(f"Environment BOT_ID: {bot_app_id}")
+    logger.debug(f"Environment TEAMS_APP_TENANT_ID: {bot_tenant_id}")
+
     if bot_app_id:
-        logger.info(f"🔐 Authentication configured for production (Bot ID: {bot_app_id[:8]}...)")
+        # Create auth configuration for JWT token validation
+        # CLIENT_ID is required by jwt_authorization_middleware to validate incoming tokens
+        # Note: For M365 Copilot, the token audience might be the M365_APP_ID instead of BOT_ID
+        # Check logs for "Invalid audience" to diagnose mismatches
+        auth_config = AgentAuthConfiguration(
+            client_id=bot_app_id,
+            tenant_id=bot_tenant_id,
+        )
+        logger.info(f"🔐 JWT authentication configured (CLIENT_ID: {auth_config.CLIENT_ID})")
+        logger.info(f"   Tenant ID: {auth_config.TENANT_ID}")
+        # Log other potential app IDs for debugging audience mismatches
+        m365_app_id = environ.get("M365_APP_ID")
+        if m365_app_id:
+            logger.info(f"   M365 App ID (alternate audience): {m365_app_id}")
     else:
         logger.warning("⚠️  Running in anonymous mode (local development only)")
 
@@ -938,8 +967,10 @@ async def _build_and_start_agent() -> None:
     # Start HTTP server (async call)
     logger.info("✅ Agent application ready!")
 
-    # Get auth configuration from connection manager (standard pattern)
-    auth_config = connection_manager.get_default_connection_configuration() if connection_manager else None
+    # Use the auth_config created earlier for JWT validation
+    # For Managed Identity in production, merge with connection manager config if needed
+    if connection_manager and not auth_config:
+        auth_config = connection_manager.get_default_connection_configuration()
 
     await start_server(agent_app, auth_config)
 
