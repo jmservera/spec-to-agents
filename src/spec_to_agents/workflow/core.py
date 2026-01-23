@@ -2,6 +2,9 @@
 
 """Event planning multi-agent workflow definition and lazy initialization."""
 
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
 from agent_framework import (
     AgentExecutor,
     BaseChatClient,
@@ -18,6 +21,49 @@ from spec_to_agents.agents import (
     venue_specialist,
 )
 from spec_to_agents.workflow.executors import EventPlanningCoordinator
+
+if TYPE_CHECKING:
+    from agent_framework import ChatAgent
+
+
+@dataclass
+class SharedAgents:
+    """Container for shared agent instances to prevent duplicate registration."""
+
+    coordinator: "ChatAgent"
+    venue: "ChatAgent"
+    budget: "ChatAgent"
+    catering: "ChatAgent"
+    logistics: "ChatAgent"
+
+
+# Singleton agents - shared across all workflow instances
+_shared_agents: SharedAgents | None = None
+
+
+def get_shared_agents() -> SharedAgents:
+    """
+    Get or create singleton agent instances.
+
+    Agents are the heavy objects that register with Azure AI Agent Service.
+    Sharing them prevents "Function tools must have unique names" errors
+    when multiple workflows are created.
+
+    Returns
+    -------
+    SharedAgents
+        Container with all shared agent instances
+    """
+    global _shared_agents
+    if _shared_agents is None:
+        _shared_agents = SharedAgents(
+            coordinator=event_coordinator.create_agent(),
+            venue=venue_specialist.create_agent(),
+            budget=budget_analyst.create_agent(),
+            catering=catering_coordinator.create_agent(),
+            logistics=logistics_manager.create_agent(),
+        )
+    return _shared_agents
 
 
 @inject
@@ -82,20 +128,17 @@ def build_event_planning_workflow(
     The client parameter should be managed as an async context manager in the
     calling code to ensure proper cleanup of agents when the workflow is done.
     """
-    # Create agents
-    coordinator_agent = event_coordinator.create_agent()
-    venue_agent = venue_specialist.create_agent()
-    budget_agent = budget_analyst.create_agent()
-    catering_agent = catering_coordinator.create_agent()
-    logistics_agent = logistics_manager.create_agent()
+    # Get singleton agents (prevents "Function tools must have unique names" errors)
+    agents = get_shared_agents()
+
     # Create coordinator executor with routing logic
-    coordinator = EventPlanningCoordinator(coordinator_agent)
+    coordinator = EventPlanningCoordinator(agents.coordinator)
 
     # Create specialist executors
-    venue_exec = AgentExecutor(agent=venue_agent, id="venue")
-    budget_exec = AgentExecutor(agent=budget_agent, id="budget")
-    catering_exec = AgentExecutor(agent=catering_agent, id="catering")
-    logistics_exec = AgentExecutor(agent=logistics_agent, id="logistics")
+    venue_exec = AgentExecutor(agent=agents.venue, id="venue")
+    budget_exec = AgentExecutor(agent=agents.budget, id="budget")
+    catering_exec = AgentExecutor(agent=agents.catering, id="catering")
+    logistics_exec = AgentExecutor(agent=agents.logistics, id="logistics")
 
     # Build workflow with bidirectional star topology
     workflow = (
