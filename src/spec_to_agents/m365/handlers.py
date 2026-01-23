@@ -264,7 +264,7 @@ async def execute_workflow(
                     )
                 else:
                     message = "".join(streamed_content)
-                    if len(message) >= 0:
+                    if len(message) > 0:
                         activity = Activity(type="message", text=message)  # pyright: ignore[reportCallIssue]
                 if activity:
                     await context.send_activity(activity)
