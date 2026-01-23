@@ -65,6 +65,17 @@ def get_shared_agents() -> SharedAgents:
     )
 
 
+def clear_shared_agents() -> None:
+    """
+    Clear the cached shared agent instances.
+
+    This is primarily intended for testing or cleanup scenarios where
+    multiple workflows are built sequentially or in parallel and need
+    isolation. After calling this function, the next call to
+    ``get_shared_agents`` will recreate all agent instances.
+    """
+    global _shared_agents
+    _shared_agents = None
 @inject
 def build_event_planning_workflow(
     client: BaseChatClient = Provide["client"],
