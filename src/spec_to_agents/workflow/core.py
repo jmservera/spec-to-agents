@@ -2,6 +2,7 @@
 
 """Event planning multi-agent workflow definition and lazy initialization."""
 
+import functools
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -37,10 +38,7 @@ class SharedAgents:
     logistics: "ChatAgent"
 
 
-# Singleton agents - shared across all workflow instances
-_shared_agents: SharedAgents | None = None
-
-
+@functools.lru_cache(maxsize=1)
 def get_shared_agents() -> SharedAgents:
     """
     Get or create singleton agent instances.
@@ -49,21 +47,22 @@ def get_shared_agents() -> SharedAgents:
     Sharing them prevents "Function tools must have unique names" errors
     when multiple workflows are created.
 
+    This function uses @functools.lru_cache(maxsize=1) to ensure thread-safe
+    singleton behavior. The cache guarantees that the function body is only
+    executed once, even in multi-threaded environments.
+
     Returns
     -------
     SharedAgents
         Container with all shared agent instances
     """
-    global _shared_agents
-    if _shared_agents is None:
-        _shared_agents = SharedAgents(
-            coordinator=event_coordinator.create_agent(),
-            venue=venue_specialist.create_agent(),
-            budget=budget_analyst.create_agent(),
-            catering=catering_coordinator.create_agent(),
-            logistics=logistics_manager.create_agent(),
-        )
-    return _shared_agents
+    return SharedAgents(
+        coordinator=event_coordinator.create_agent(),
+        venue=venue_specialist.create_agent(),
+        budget=budget_analyst.create_agent(),
+        catering=catering_coordinator.create_agent(),
+        logistics=logistics_manager.create_agent(),
+    )
 
 
 @inject
