@@ -89,7 +89,7 @@ async def stream_until_sentence(agent: ChatAgent, prompt: str, keywords: list[st
 
 
 @pytest.mark.asyncio
-async def test_venue_specialist_responds(load_integration_env, setup_di_container):
+async def test_venue_specialist_responds(load_integration_env, setup_di_container):  # type: ignore
     """Test that venue specialist agent can respond to a simple query."""
     skip_if_no_azure()
 
@@ -107,7 +107,7 @@ async def test_venue_specialist_responds(load_integration_env, setup_di_containe
 
 
 @pytest.mark.asyncio
-async def test_budget_analyst_responds(load_integration_env, setup_di_container):
+async def test_budget_analyst_responds(load_integration_env, setup_di_container):  # type: ignore
     """Test that budget analyst agent can respond to a simple query."""
     skip_if_no_azure()
 
@@ -125,7 +125,7 @@ async def test_budget_analyst_responds(load_integration_env, setup_di_container)
 
 
 @pytest.mark.asyncio
-async def test_catering_coordinator_responds(load_integration_env, setup_di_container):
+async def test_catering_coordinator_responds(load_integration_env, setup_di_container):  # type: ignore
     """Test that catering coordinator agent can respond to a simple query."""
     skip_if_no_azure()
 
@@ -143,7 +143,7 @@ async def test_catering_coordinator_responds(load_integration_env, setup_di_cont
 
 
 @pytest.mark.asyncio
-async def test_logistics_manager_responds(load_integration_env, setup_di_container):
+async def test_logistics_manager_responds(load_integration_env, setup_di_container):  # type: ignore
     """Test that logistics manager agent can respond to a simple query."""
     skip_if_no_azure()
 
@@ -161,7 +161,7 @@ async def test_logistics_manager_responds(load_integration_env, setup_di_contain
 
 
 @pytest.mark.asyncio
-async def test_event_coordinator_responds(load_integration_env, setup_di_container):
+async def test_event_coordinator_responds(load_integration_env, setup_di_container):  # type: ignore
     """Test that event coordinator agent can respond to a simple query."""
     skip_if_no_azure()
 
@@ -186,7 +186,7 @@ async def test_event_coordinator_responds(load_integration_env, setup_di_contain
 
 @pytest.mark.slow
 @pytest.mark.asyncio
-async def test_workflow_execution_basic(load_integration_env, setup_di_container):
+async def test_workflow_execution_basic(load_integration_env, setup_di_container):  # type: ignore
     """Test basic workflow execution with a simple event planning request."""
     skip_if_no_azure()
 
@@ -205,7 +205,7 @@ async def test_workflow_execution_basic(load_integration_env, setup_di_container
 
 @pytest.mark.slow
 @pytest.mark.asyncio
-async def test_workflow_execution_contains_sections(load_integration_env, setup_di_container):
+async def test_workflow_execution_contains_sections(load_integration_env, setup_di_container):  # type: ignore
     """Test that workflow output contains expected sections from all agents."""
     skip_if_no_azure()
 
