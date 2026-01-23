@@ -1,20 +1,8 @@
-# Builder stage - use slim Python image
-FROM python:3.12-slim-bookworm AS builder
+# Use the official uv image as builder
+FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS builder
 
 # Set working directory
 WORKDIR /app
-
-# Install uv manually (following official installation)
-ARG UV_VERSION=0.5.11
-ENV UV_VERSION=${UV_VERSION}
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    ca-certificates \
-    && curl -LsSf https://astral.sh/uv/${UV_VERSION}/install.sh | sh \
-    && rm -rf /var/lib/apt/lists/*
-
-# Add uv to PATH
-ENV PATH="/root/.local/bin:$PATH"
 
 # Enable bytecode compilation for faster startup
 ENV UV_COMPILE_BYTECODE=1
@@ -68,11 +56,4 @@ EXPOSE ${PORT}
 # Run the application directly with Python (no uv run to avoid re-syncing)
 # The virtual environment is already in PATH, so Python will use it
 
-# App variant - map to actual Python module commands
-ARG APP_CMD="app"
-ENV APP_CMD=${APP_CMD}
-
-# Use exec form with shell to interpret the command
-# For "app": python -m spec_to_agents.main
-# For "m365": python -m spec_to_agents.m365_server
-CMD ["sh", "-c", "case $APP_CMD in app) exec python -m spec_to_agents.main ;; m365-server) exec python -m spec_to_agents.m365_server ;; *) exec python -m spec_to_agents.$APP_CMD ;; esac"]
+CMD ["python", "-m", "spec_to_agents.main"]
