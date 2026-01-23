@@ -91,22 +91,18 @@ deploy:
     name: set environment variables
     with:
       run: echo "::set-teamsfx-env
-        AZURE_CONTAINER_IMAGE_APP=${{AZURE_CONTAINER_REGISTRY_ENDPOINT}}/app:latest";
-        echo "::set-teamsfx-env
-        AZURE_CONTAINER_IMAGE_BOT=${{AZURE_CONTAINER_REGISTRY_ENDPOINT}}/bot:latest"
+        AZURE_CONTAINER_IMAGE_APP=${{AZURE_CONTAINER_REGISTRY_ENDPOINT}}/app:latest"
 
   - uses: script  
-    name: build container image 1
+    name: build container image
     with:  
-      run: az acr build --registry ${{AZURE_CONTAINER_REGISTRY_NAME}} --image ${{AZURE_CONTAINER_IMAGE_BOT}} --build-arg APP_CMD="m365-server" .;
-        az acr build --registry ${{AZURE_CONTAINER_REGISTRY_NAME}} --image ${{AZURE_CONTAINER_IMAGE_APP}} --build-arg APP_CMD=app .
+      run: az acr build --registry ${{AZURE_CONTAINER_REGISTRY_NAME}} --image ${{AZURE_CONTAINER_IMAGE_APP}} .
 
   - uses: script
     name: deploy container image
     with:
       run: |
-        az containerapp update -n ${{AZURE_APP_NAME}} --image ${{AZURE_CONTAINER_IMAGE_APP}} -g ${{AZURE_RESOURCE_GROUP_NAME}} --revision-suffix ([int](Get-Date -UFormat %s -Millisecond 0));
-        az containerapp update -n ${{AZURE_BOT_NAME}} --image ${{AZURE_CONTAINER_IMAGE_BOT}} -g ${{AZURE_RESOURCE_GROUP_NAME}} --revision-suffix ([int](Get-Date -UFormat %s -Millisecond 0))
+        az containerapp update -n ${{AZURE_APP_NAME}} --image ${{AZURE_CONTAINER_IMAGE_APP}} -g ${{AZURE_RESOURCE_GROUP_NAME}} --revision-suffix ([int](Get-Date -UFormat %s -Millisecond 0))
 
 # --env-vars "clientId=secretref:bot-id"
 # "tenantId=secretref:bot-tenant-id" "BOT_TYPE=secretref:bot-type" "BOT_DOMAIN=${{BOT_DOMAIN}}"

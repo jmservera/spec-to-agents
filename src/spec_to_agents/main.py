@@ -1,6 +1,5 @@
 # Copyright (c) Microsoft. All rights reserved.
 
-import os
 from os import environ
 
 from agent_framework.observability import setup_observability
@@ -10,7 +9,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Enable observability (skip in container environments if not configured)
-if not (os.getenv("CONTAINER_ENV") == "true" and not os.getenv("APPLICATIONINSIGHTS_CONNECTION_STRING")):
+if not (environ.get("CONTAINER_ENV") == "true" and not environ.get("APPLICATIONINSIGHTS_CONNECTION_STRING")):
     setup_observability()
 
 
@@ -42,9 +41,9 @@ def main() -> None:
     container.wire(modules=[__name__])
 
     # Get port from environment (for container deployments) or use default
-    port = int(os.getenv("PORT", "8080"))
+    port = int(environ.get("PORT", "8080"))
     # Bind to 0.0.0.0 in container environments for external access
-    host = "0.0.0.0" if os.getenv("CONTAINER_ENV") == "true" else "localhost"  # noqa: S104
+    host = "0.0.0.0" if environ.get("CONTAINER_ENV") == "true" else "localhost"  # noqa: S104
 
     logger.info("Starting Agent Workflow DevUI with M365 Integration...")
     logger.info(f"Available at: http://{host}:{port}")

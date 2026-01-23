@@ -12,7 +12,6 @@ import logging
 import time
 import traceback
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from agent_framework import (
     AgentRunUpdateEvent,
@@ -30,9 +29,6 @@ from spec_to_agents.utils.copilot_display import AGENT_ICONS, get_agent_icon
 from spec_to_agents.workflow.core import build_event_planning_workflow
 
 from .state import WorkflowTurnState, get_workflow_cache
-
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger(__name__)
 
