@@ -274,8 +274,8 @@
                 ],
                 "background": {
                     "activeOnStart": true,
-                    "beginsPattern": "Running on http://localhost|Agent application ready",
-                    "endsPattern": "Server Error|Server stopped"
+                    "beginsPattern": "🚀 Initializing Event Planning Agent Server",
+                    "endsPattern": "Running on http://localhost|Agent application ready"
                 }
             }
         },

@@ -89,8 +89,21 @@ deploy:
     with:
       target: ./.localConfigs
       envs:
-        clientId: ${{BOT_ID}}
-        clientSecret: ${{SECRET_BOT_PASSWORD}}
-        tenantId: ${{TEAMS_APP_TENANT_ID}}
+        # MSAL Connection Manager config (required for outbound auth to Bot Framework)
+        # Format: CONNECTIONS__SERVICE_CONNECTION__SETTINGS__<KEY>
+        # NOTE: For multi-tenant apps, don't specify TENANTID - it defaults to botframework.com
+        CONNECTIONS__SERVICE_CONNECTION__SETTINGS__CLIENTID: ${{BOT_ID}}
+        CONNECTIONS__SERVICE_CONNECTION__SETTINGS__CLIENTSECRET: ${{SECRET_BOT_PASSWORD}}
+        CONNECTIONS__SERVICE_CONNECTION__SETTINGS__AUTH_TYPE: ClientSecret
+        # Bot identity for JWT validation (used by Python server)
+        BOT_ID: ${{BOT_ID}}
+        TEAMS_APP_TENANT_ID: ${{TEAMS_APP_TENANT_ID}}
+        # M365 App ID (may be needed as JWT audience for Copilot)
+        M365_APP_ID: ${{M365_APP_ID}}
+        # Azure AI configuration
         AZURE_AI_PROJECT_ENDPOINT: ${{AZURE_AI_PROJECT_ENDPOINT}}
         AZURE_AI_MODEL_DEPLOYMENT_NAME: ${{AZURE_AI_MODEL_DEPLOYMENT_NAME}}
+        AZURE_OPENAI_API_VERSION: ${{AZURE_OPENAI_API_VERSION}}
+        WEB_SEARCH_MODEL: ${{WEB_SEARCH_MODEL}}
+        BING_CONNECTION_ID: ${{BING_CONNECTION_ID}}
+        CALENDAR_STORAGE_PATH: ${{CALENDAR_STORAGE_PATH}}
