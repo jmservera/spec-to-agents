@@ -28,7 +28,9 @@ from .state import WorkflowTurnState
 logger = logging.getLogger(__name__)
 
 
-def create_agent_application() -> tuple[AgentApplication[WorkflowTurnState], AgentAuthConfiguration | None]:
+def create_agent_application() -> tuple[
+    AgentApplication[WorkflowTurnState], CloudAdapter, AgentAuthConfiguration | None
+]:
     """
     Create and configure an AgentApplication with activity handlers.
 
@@ -41,9 +43,9 @@ def create_agent_application() -> tuple[AgentApplication[WorkflowTurnState], Age
 
     Returns
     -------
-    tuple[AgentApplication[WorkflowTurnState], AgentAuthConfiguration | None]
-        A tuple containing the configured AgentApplication and the auth configuration
-        (which may be None if BOT_ID is not set).
+    tuple[AgentApplication[WorkflowTurnState], CloudAdapter, AgentAuthConfiguration | None]
+        A tuple containing the configured AgentApplication, CloudAdapter, and the auth
+        configuration (which may be None if BOT_ID is not set).
 
     Raises
     ------
@@ -96,7 +98,7 @@ def create_agent_application() -> tuple[AgentApplication[WorkflowTurnState], Age
     # Register activity handlers
     _register_activity_handlers(agent_app)
 
-    return agent_app, auth_config
+    return agent_app, adapter, auth_config
 
 
 def _register_activity_handlers(agent_app: AgentApplication[WorkflowTurnState]) -> None:

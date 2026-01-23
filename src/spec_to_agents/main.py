@@ -17,7 +17,9 @@ if not (os.getenv("CONTAINER_ENV") == "true" and not os.getenv("APPLICATIONINSIG
 def main() -> None:
     """Launch the branching workflow in DevUI with DI container and M365 integration."""
     import logging
+    import sys
 
+    import uvicorn
     from agent_framework.devui import DevServer
     from fastapi import FastAPI
 
@@ -26,7 +28,13 @@ def main() -> None:
     from spec_to_agents.m365 import create_agent_application, initialize_m365_components
     from spec_to_agents.workflow import export_workflow
 
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    logging.getLogger("azure.monitor.opentelemetry.exporter.export._base").setLevel(logging.WARNING)
+    logging.getLogger("azure.core.pipeline.policies.http_logging_policy").setLevel(logging.WARNING)
+
+    # Configure logging with environment variable support
+    LOG_LEVEL = environ.get("LOG_LEVEL", "INFO").upper()
+
+    logging.basicConfig(level=LOG_LEVEL, format="%(message)s", handlers=[logging.StreamHandler(sys.stdout)], force=True)
     logger = logging.getLogger(__name__)
 
     # Initialize DI container and wire modules for dependency injection
@@ -35,8 +43,6 @@ def main() -> None:
 
     # Get port from environment (for container deployments) or use default
     port = int(os.getenv("PORT", "8080"))
-    # Disable auto_open in container environments
-    auto_open = os.getenv("ENVIRONMENT") != "production"
     # Bind to 0.0.0.0 in container environments for external access
     host = "0.0.0.0" if os.getenv("CONTAINER_ENV") == "true" else "localhost"  # noqa: S104
 
@@ -49,11 +55,10 @@ def main() -> None:
 
     # Create DevServer instance to get access to the FastAPI app
     server = DevServer(
-        entities=workflows + agents,
         port=port,
         host=host,
-        auto_open=auto_open,
     )
+    server._pending_entities = workflows + agents  # type: ignore[assignment]
 
     # Get the underlying FastAPI app
     app: FastAPI = server.get_app()
@@ -63,14 +68,15 @@ def main() -> None:
     bot_app_id = environ.get("BOT_ID")
     if bot_app_id:
         logger.info("🤖 Initializing M365 Agents SDK integration...")
-        agent_app, auth_config = create_agent_application()
-        initialize_m365_components(app, agent_app, auth_config)
+        agent_app, adapter, auth_config = create_agent_application()
+        initialize_m365_components(app, agent_app, adapter, auth_config)
         logger.info("✅ M365 routes registered on /api/messages")
     else:
         logger.info("ℹ️  BOT_ID not configured - M365 integration disabled")  # noqa: RUF001
 
     # Start the DevUI server
-    server.serve()
+    logger.info(f"Starting Agent Framework DevUI on {host}:{port}")
+    uvicorn.run(app, host=host, port=port, log_level="info")
 
 
 if __name__ == "__main__":

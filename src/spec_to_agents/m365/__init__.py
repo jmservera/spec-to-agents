@@ -9,14 +9,14 @@ enabling the event planning workflow to be exposed via the /api/messages endpoin
 
 from .app_builder import create_agent_application
 from .handlers import execute_workflow, generate_context_card
-from .routes import create_m365_routes, initialize_m365_components
+from .routes import create_m365_subapp, initialize_m365_components
 from .state import WorkflowTurnState, clear_workflow_cache, get_workflow_cache
 
 __all__ = [
     "WorkflowTurnState",
     "clear_workflow_cache",
     "create_agent_application",
-    "create_m365_routes",
+    "create_m365_subapp",
     "execute_workflow",
     "generate_context_card",
     "get_workflow_cache",

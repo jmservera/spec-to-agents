@@ -102,11 +102,11 @@ async def _build_and_start_server() -> None:
     and configures the FastAPI server with M365 routes.
     """
     # Create agent application using shared builder
-    agent_app, auth_config = create_agent_application()
+    agent_app, adapter, auth_config = create_agent_application()
 
     # Create FastAPI app and register M365 routes
     app = FastAPI(title="Event Planning M365 Agent")
-    initialize_m365_components(app, agent_app, auth_config)
+    initialize_m365_components(app, agent_app, adapter, auth_config)
 
     logger.info("✅ Agent application ready!")
 
