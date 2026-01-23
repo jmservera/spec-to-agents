@@ -11,7 +11,7 @@
         "dev:teamsfx": "env-cmd --silent -f .localConfigs npm run dev",
         "dev:teamsfx:playground": "env-cmd --silent -f .localConfigs.playground npm run dev",
         "dev:teamsfx:launch-playground": "env-cmd --silent -f env/.env.playground agentsplayground start",
-        "dev": "uv run -m debugpy --listen 5678 src/spec_to_agents/main.py"
+        "dev": "uv run -m debugpy --listen 5678 src/spec_to_agents/m365_server.py"
     },
     "repository": {
         "type": "git",

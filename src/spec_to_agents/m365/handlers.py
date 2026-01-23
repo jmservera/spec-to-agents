@@ -22,7 +22,6 @@ from agent_framework import (
     WorkflowStatusEvent,
 )
 from microsoft_agents.activity import Activity, ActivityTypes, Attachment
-from microsoft_agents.hosting.aiohttp.app.streaming import StreamingResponse
 from microsoft_agents.hosting.core import TurnContext
 
 from spec_to_agents.models.messages import HumanFeedbackRequest
@@ -151,10 +150,9 @@ async def execute_workflow(
     last_notified_agent: str | None = None
 
     # Access streaming response - it may be None in non-streaming contexts
-    streaming: StreamingResponse | None = context.streaming_response  # type: ignore
+    streaming = context.streaming_response
     stream_timed_out = False
     streaming_stopped = False
-    streaming_stop_notified = False
     streamed_content: list[str] = []
     streamed_attachments: list[Attachment] = []
     already_queued_text = False
@@ -313,8 +311,7 @@ async def execute_workflow(
 
                 current_time = time.time()
 
-                if current_time - start_time >= 90.0 and not streaming_stop_notified:
-                    streaming_stop_notified = True
+                if current_time - start_time >= 90.0 and not streaming_stopped:
                     logger.warning("⚠️ Workflow execution time exceeded 90 seconds, stopping updates")
                     try:
                         queue_text_activity(
