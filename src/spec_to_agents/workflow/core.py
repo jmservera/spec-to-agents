@@ -76,6 +76,8 @@ def clear_shared_agents() -> None:
     """
     global _shared_agents
     _shared_agents = None
+
+
 @inject
 def build_event_planning_workflow(
     client: BaseChatClient = Provide["client"],

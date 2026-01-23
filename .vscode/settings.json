@@ -12,7 +12,7 @@
         "uv": true
     },
     "python.testing.pytestArgs": [
-        "tests"
+        "tests","tests_integration"
     ],
     "python.testing.unittestEnabled": false,
     "python.testing.pytestEnabled": true,
