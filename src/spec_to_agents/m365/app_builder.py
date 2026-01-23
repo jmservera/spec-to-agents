@@ -13,7 +13,7 @@ import logging
 from os import environ
 from typing import Any
 
-from microsoft_agents.activity import load_configuration_from_env
+from microsoft_agents.activity import load_configuration_from_env  # pyright: ignore[reportUnknownVariableType]
 from microsoft_agents.authentication.msal import MsalConnectionManager
 from microsoft_agents.hosting.core import (
     AgentApplication,
