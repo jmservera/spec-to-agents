@@ -1,9 +1,25 @@
 # Copyright (c) Microsoft. All rights reserved.
+import os
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
 from agent_framework.azure import AzureAIAgentClient
 from azure.identity.aio import AzureCliCredential, ChainedTokenCredential, ManagedIdentityCredential
+
+
+def _get_managed_identity_credential() -> ManagedIdentityCredential:
+    """
+    Create a ManagedIdentityCredential with the correct client ID for user-assigned identities.
+
+    Returns
+    -------
+    ManagedIdentityCredential
+        Credential configured with user-assigned managed identity client ID if available.
+    """
+    client_id = os.getenv("AZURE_CLIENT_ID")
+    if client_id:
+        return ManagedIdentityCredential(client_id=client_id)
+    return ManagedIdentityCredential()
 
 
 def create_agent_client_for_devui() -> AzureAIAgentClient:
@@ -27,7 +43,7 @@ def create_agent_client_for_devui() -> AzureAIAgentClient:
     the application's shutdown hooks. This is intentional for DevUI integration.
     """
     credential = ChainedTokenCredential(
-        ManagedIdentityCredential(),
+        _get_managed_identity_credential(),
         AzureCliCredential(),
     )
     return AzureAIAgentClient(async_credential=credential)
@@ -68,7 +84,7 @@ async def create_agent_client() -> AsyncIterator[AzureAIAgentClient]:
     ...     result = agent.run("Hello")
     """
     credential = ChainedTokenCredential(
-        ManagedIdentityCredential(),
+        _get_managed_identity_credential(),
         AzureCliCredential(),
     )
     client = AzureAIAgentClient(async_credential=credential)

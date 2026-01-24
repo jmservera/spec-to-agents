@@ -85,6 +85,13 @@ uv run app
 
 Then navigate to the URL shown (by default `http://localhost:8080`)
 
+**M365 Agents SDK Server:**
+```bash
+uv run m365-server
+```
+
+This starts an HTTP server on `http://localhost:3978` compatible with Microsoft Teams, M365 Copilot, and other Microsoft platforms using the Microsoft 365 Agents SDK.
+
 ### Example Input
 
 Try this event planning request:
@@ -110,6 +117,7 @@ spec-to-agents/
 ├── src/spec_to_agents/
 │   ├── main.py          # DevUI entry point (uv run app)
 │   ├── console.py       # Interactive CLI entry point (uv run console)
+│   ├── m365_server.py   # M365 Agents SDK HTTP server (uv run m365-server)
 │   ├── agents/          # Agent definitions (budget_analyst, venue_specialist, etc.)
 │   ├── prompts/         # System prompts for each agent
 │   ├── tools/           # Tool implementations (web search, weather, calendar, mcp)

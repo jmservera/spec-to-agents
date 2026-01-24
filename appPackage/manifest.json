@@ -1,0 +1,79 @@
+{
+    "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.24/MicrosoftTeams.schema.json",
+    "manifestVersion": "1.24",
+    "version": "1.0.3",
+    "id": "${{TEAMS_APP_ID}}",
+    "developer": {
+        "name": "Microsoft CoreAI",
+        "websiteUrl": "https://www.microsoft.com",
+        "privacyUrl": "https://www.microsoft.com/privacy/privacystatement",
+        "termsOfUseUrl": "https://www.microsoft.com/legal/terms-of-use"
+    },
+    "icons": {
+        "color": "color.png",
+        "outline": "outline.png"
+    },
+    "name": {
+        "short": "Event Planning (${{APP_NAME_SUFFIX}})",
+        "full": "Event Planning Multi-Agent System to organize events ${{APP_NAME_SUFFIX}}"
+    },
+    "description": {
+        "short": "Event Planning Multi-Agent System to organize events",
+        "full": "Event Planning Multi-Agent System to organize events using Azure AI and Microsoft 365 capabilities"
+    },
+    "accentColor": "#FFFFFF",
+    "copilotAgents": {
+        "customEngineAgents": [
+            {
+                "type": "bot",
+                "id": "${{BOT_ID}}"
+            }
+        ]
+    },
+    "bots": [
+        {
+            "botId": "${{BOT_ID}}",
+            "scopes": [
+                "copilot",
+                "personal",
+                "team"
+            ],
+            "supportsFiles": false,
+            "isNotificationOnly": false,
+            "commandLists": [
+                {
+                    "scopes": [
+                        "copilot",
+                        "personal"
+                    ],
+                    "commands": [
+                        {
+                            "title": "Plan a corporate internal party",
+                            "description": "Plan a corporate holiday party for 50 people on December 6th in Seattle with a budget of $5,000. Include venue options, catering for dietary restrictions, and check the weather forecast."
+                        },
+                        {
+                            "title": "Plan a birthday party",
+                            "description": "Plan a birthday party for 20 people on July 15th, in Madrid, Spain, with a budget of $2,000. Include venue options, vegetarian catering for dietary restrictions, and suggest fun activities."
+                        },
+                        {
+                            "title": "Plan a wedding reception",
+                            "description": "Plan a wedding reception for 100 people on June 10th, in Tuscany, Italy, with a budget of $15,000. Include venue options, catering for dietary restrictions, and suggest a timeline for the event."
+                        },
+                        {
+                            "title": "Suggest the best date for a whale sightseeing trip for a group of 10 people",
+                            "description": "Suggest the best date for a whale sightseeing trip for a group of 10 people in the Mediterranean Sea, considering weather conditions and local regulations."
+                        }
+                    ]
+                }
+            ]
+        }
+    ],
+    "composeExtensions": [],
+    "configurableTabs": [],
+    "staticTabs": [],
+    "permissions": [
+        "identity",
+        "messageTeamMembers"
+    ],
+    "validDomains": []
+}

@@ -153,7 +153,7 @@ Once you provide your catering plan, indicate you're ready for the next step in 
 
 <structured_output_format>
 Your response MUST be structured JSON with these fields:
-- summary: Your catering recommendations in maximum 200 words
+- summary: Your catering recommendations in maximum 200 words in Markdown format
 - next_agent: Which specialist should work next ("budget", "logistics") or null
 - user_input_needed: true if you need user dietary preferences/approval
 - user_prompt: Question for user (if user_input_needed is true)

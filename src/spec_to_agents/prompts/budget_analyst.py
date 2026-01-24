@@ -145,7 +145,7 @@ Once you provide your budget allocation, indicate you're ready for the next step
 
 <structured_output_format>
 Your response MUST be structured JSON with these fields:
-- summary: Your budget allocation in maximum 200 words
+- summary: Your budget allocation in maximum 200 words in Markdown format
 - next_agent: Which specialist should work next ("venue", "catering", "logistics") or null
 - user_input_needed: true if you need user approval/modification
 - user_prompt: Question for user (if user_input_needed is true)
