@@ -2,6 +2,10 @@
 
 """Event planning multi-agent workflow definition and lazy initialization."""
 
+import functools
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
 from agent_framework import (
     AgentExecutor,
     BaseChatClient,
@@ -18,6 +22,60 @@ from spec_to_agents.agents import (
     venue_specialist,
 )
 from spec_to_agents.workflow.executors import EventPlanningCoordinator
+
+if TYPE_CHECKING:
+    from agent_framework import ChatAgent
+
+
+@dataclass
+class SharedAgents:
+    """Container for shared agent instances to prevent duplicate registration."""
+
+    coordinator: "ChatAgent"
+    venue: "ChatAgent"
+    budget: "ChatAgent"
+    catering: "ChatAgent"
+    logistics: "ChatAgent"
+
+
+@functools.lru_cache(maxsize=1)
+def get_shared_agents() -> SharedAgents:
+    """
+    Get or create singleton agent instances.
+
+    Agents are the heavy objects that register with Azure AI Agent Service.
+    Sharing them prevents "Function tools must have unique names" errors
+    when multiple workflows are created.
+
+    This function uses @functools.lru_cache(maxsize=1) to ensure thread-safe
+    singleton behavior. The cache guarantees that the function body is only
+    executed once, even in multi-threaded environments.
+
+    Returns
+    -------
+    SharedAgents
+        Container with all shared agent instances
+    """
+    return SharedAgents(
+        coordinator=event_coordinator.create_agent(),
+        venue=venue_specialist.create_agent(),
+        budget=budget_analyst.create_agent(),
+        catering=catering_coordinator.create_agent(),
+        logistics=logistics_manager.create_agent(),
+    )
+
+
+def clear_shared_agents() -> None:
+    """
+    Clear the cached shared agent instances.
+
+    This is primarily intended for testing or cleanup scenarios where
+    multiple workflows are built sequentially or in parallel and need
+    isolation. After calling this function, the next call to
+    ``get_shared_agents`` will recreate all agent instances.
+    """
+    global _shared_agents
+    _shared_agents = None
 
 
 @inject
@@ -82,20 +140,17 @@ def build_event_planning_workflow(
     The client parameter should be managed as an async context manager in the
     calling code to ensure proper cleanup of agents when the workflow is done.
     """
-    # Create agents
-    coordinator_agent = event_coordinator.create_agent()
-    venue_agent = venue_specialist.create_agent()
-    budget_agent = budget_analyst.create_agent()
-    catering_agent = catering_coordinator.create_agent()
-    logistics_agent = logistics_manager.create_agent()
+    # Get singleton agents (prevents "Function tools must have unique names" errors)
+    agents = get_shared_agents()
+
     # Create coordinator executor with routing logic
-    coordinator = EventPlanningCoordinator(coordinator_agent)
+    coordinator = EventPlanningCoordinator(agents.coordinator)
 
     # Create specialist executors
-    venue_exec = AgentExecutor(agent=venue_agent, id="venue")
-    budget_exec = AgentExecutor(agent=budget_agent, id="budget")
-    catering_exec = AgentExecutor(agent=catering_agent, id="catering")
-    logistics_exec = AgentExecutor(agent=logistics_agent, id="logistics")
+    venue_exec = AgentExecutor(agent=agents.venue, id="venue")
+    budget_exec = AgentExecutor(agent=agents.budget, id="budget")
+    catering_exec = AgentExecutor(agent=agents.catering, id="catering")
+    logistics_exec = AgentExecutor(agent=agents.logistics, id="logistics")
 
     # Build workflow with bidirectional star topology
     workflow = (

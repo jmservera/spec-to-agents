@@ -23,6 +23,9 @@ htmlcov
 .coverage
 *.cover
 
+# node
+node_modules
+
 # IDE
 .vscode
 .idea
@@ -77,3 +80,6 @@ docker-compose*.yml
 *.log
 tmp/
 temp/
+
+devTools
+data

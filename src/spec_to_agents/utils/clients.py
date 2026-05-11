@@ -7,6 +7,11 @@ from agent_framework.azure import AzureAIAgentClient
 from azure.identity.aio import AzureCliCredential, ChainedTokenCredential, ManagedIdentityCredential
 
 
+def _is_container_environment() -> bool:
+    """Check if running in a container environment (Azure Container Apps, etc.)."""
+    return os.getenv("CONTAINER_ENV") == "true"
+
+
 def _get_managed_identity_credential() -> ManagedIdentityCredential:
     """
     Create a ManagedIdentityCredential with the correct client ID for user-assigned identities.
@@ -20,6 +25,26 @@ def _get_managed_identity_credential() -> ManagedIdentityCredential:
     if client_id:
         return ManagedIdentityCredential(client_id=client_id)
     return ManagedIdentityCredential()
+
+
+def _create_credential_chain() -> ChainedTokenCredential:
+    """
+    Create a ChainedTokenCredential with appropriate order based on environment.
+
+    In container environments, ManagedIdentityCredential is tried first.
+    In local development, AzureCliCredential is tried first to avoid IMDS timeout.
+    """
+    if _is_container_environment():
+        # In Azure: try managed identity first, fall back to CLI
+        return ChainedTokenCredential(
+            _get_managed_identity_credential(),
+            AzureCliCredential(),
+        )
+    # Local dev: try CLI first to avoid IMDS timeout noise
+    return ChainedTokenCredential(
+        AzureCliCredential(),
+        _get_managed_identity_credential(),
+    )
 
 
 def create_agent_client_for_devui() -> AzureAIAgentClient:
@@ -42,11 +67,7 @@ def create_agent_client_for_devui() -> AzureAIAgentClient:
     The credential's HTTP session will remain open until explicitly closed by
     the application's shutdown hooks. This is intentional for DevUI integration.
     """
-    credential = ChainedTokenCredential(
-        _get_managed_identity_credential(),
-        AzureCliCredential(),
-    )
-    return AzureAIAgentClient(async_credential=credential)
+    return AzureAIAgentClient(async_credential=_create_credential_chain())
 
 
 @asynccontextmanager
@@ -83,10 +104,7 @@ async def create_agent_client() -> AsyncIterator[AzureAIAgentClient]:
     ...     )
     ...     result = agent.run("Hello")
     """
-    credential = ChainedTokenCredential(
-        _get_managed_identity_credential(),
-        AzureCliCredential(),
-    )
+    credential = _create_credential_chain()
     client = AzureAIAgentClient(async_credential=credential)
 
     try:

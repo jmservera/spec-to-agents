@@ -78,8 +78,8 @@
                 ],
                 "background": {
                     "activeOnStart": true,
-                    "beginsPattern": "🚀 Initializing Event Planning Agent Server",
-                    "endsPattern": "Running on http://localhost|Agent application ready"
+                    "beginsPattern": "🚀 Initializing Event Planning Agent Server|Started server process",
+                    "endsPattern": "[R|r]unning on http://localhost|Agent application ready"
                 }
             }
         },
@@ -274,8 +274,8 @@
                 ],
                 "background": {
                     "activeOnStart": true,
-                    "beginsPattern": "🚀 Initializing Event Planning Agent Server",
-                    "endsPattern": "Running on http://localhost|Agent application ready"
+                    "beginsPattern": "🚀 Initializing Event Planning Agent Server|Started server process",
+                    "endsPattern": "[R|r]unning on http://localhost|Agent application ready"
                 }
             }
         },
