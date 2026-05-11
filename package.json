@@ -18,10 +18,11 @@
         "url": "https://github.com"
     },
     "devDependencies": {
+        "@microsoft/m365agentsplayground": "^0.2.20",
+        "@microsoft/m365agentstoolkit-cli": "^1.1.4",
         "env-cmd": "^10.1.0",
         "shx": "^0.3.3",
         "ts-node": "^10.9.2",
-        "typescript": "^5.8.3",
-        "@microsoft/m365agentsplayground": "^0.2.20"
+        "typescript": "^5.8.3"
     }
 }

@@ -10,6 +10,17 @@
       "justMyCode": false,
       "envFile": "${workspaceFolder}/env/.env.dev"
     },
+    {
+      "name": "Python Debugger: Launch Teams App",
+      "type": "debugpy",
+      "request": "launch",
+    //   "preLaunchTask": ,
+      "program": "src/spec_to_agents/main.py",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "envFile": "${workspaceFolder}/env/.env.dev"
+    },
         {
             "name": "Launch Remote in Teams (Edge)",
             "type": "msedge",
